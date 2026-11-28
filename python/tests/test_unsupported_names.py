@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 import krishiv
-from krishiv.errors import UnsupportedOperationException
+from krishiv.errors import AnalysisException, UnsupportedOperationException
 
 
 @pytest.fixture(scope="module")
@@ -131,12 +131,28 @@ def test_each_cluster_setting_form_warns_at_the_users_line(setter: Any, expected
 
 
 def test_conf_set_on_a_running_session_warns_too(spark: krishiv.SparkSession) -> None:
+    # A cluster key that is not a Spark config entry is taken, with the warning.
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        spark.conf.set("spark.executor.memory", "8g")
-    ours = [w for w in caught if str(w.message).startswith("spark.executor.memory=8g has no effect")]
+        spark.conf.set("spark.executor.extraFlag", "8g")
+    ours = [w for w in caught if str(w.message).startswith("spark.executor.extraFlag=8g has no effect")]
     assert len(ours) == 1
     assert ours[0].filename == __file__
+
+
+def test_conf_set_of_a_core_key_is_refused_as_in_spark(spark: krishiv.SparkSession) -> None:
+    # Spark 4.3.0 (Connect, 2026-11-28): `spark.conf.set("spark.executor.memory", ...)` is CANNOT_MODIFY_CONFIG,
+    # and a static SQL key CANNOT_MODIFY_STATIC_CONFIG; both are AnalysisException and warn nothing.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(AnalysisException) as info:
+            spark.conf.set("spark.executor.memory", "8g")
+    assert info.value.getCondition() == "CANNOT_MODIFY_CONFIG"
+    assert not [w for w in caught if "has no effect" in str(w.message)]
+    with pytest.raises(AnalysisException) as info:
+        spark.conf.set("spark.sql.warehouse.dir", "/x")
+    assert info.value.getCondition() == "CANNOT_MODIFY_STATIC_CONFIG"
+    assert not spark.conf.isModifiable("spark.executor.memory")
 
 
 def test_a_builder_option_on_the_active_session_warns_once() -> None:

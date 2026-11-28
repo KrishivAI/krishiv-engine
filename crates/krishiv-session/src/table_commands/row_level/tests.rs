@@ -928,12 +928,12 @@ fn a_cast_can_overflow_as_delta_spark_decides() {
 fn a_delta_target_is_compared_by_its_root_not_its_spelling() {
     let dir = tempfile::tempdir().unwrap();
     let (root, other) = (dir.path().join("t"), dir.path().join("o"));
-    let s = Session::builder().build().unwrap();
-    s.conf()
-        .set(
+    let s = Session::builder()
+        .config(
             "spark.sql.warehouse.dir",
-            &dir.path().join("wh").display().to_string(),
+            dir.path().join("wh").display().to_string(),
         )
+        .build()
         .unwrap();
     for (name, path) in [("dt", &root), ("other_t", &other)] {
         let create = format!(
@@ -991,16 +991,16 @@ fn a_delta_target_is_compared_by_its_root_not_its_spelling() {
 fn a_delta_update_reads_the_whole_table_only_when_a_subquery_reads_the_target() {
     let dir = tempfile::tempdir().unwrap();
     let (root, other) = (dir.path().join("rt"), dir.path().join("ro"));
-    let s = Session::builder().build().unwrap();
+    let s = Session::builder()
+        .config(
+            "spark.sql.warehouse.dir",
+            dir.path().join("wh").display().to_string(),
+        )
+        .build()
+        .unwrap();
     let sql = |text: &str| {
         block_on(async { s.sql(text).await?.collect().await }).unwrap();
     };
-    s.conf()
-        .set(
-            "spark.sql.warehouse.dir",
-            &dir.path().join("wh").display().to_string(),
-        )
-        .unwrap();
     for (name, path) in [("rt", &root), ("ro", &other)] {
         sql(&format!(
             "CREATE TABLE {name} USING delta PARTITIONED BY (p) LOCATION '{}' AS SELECT 1 AS v, 1 AS p UNION ALL SELECT 2, 2",

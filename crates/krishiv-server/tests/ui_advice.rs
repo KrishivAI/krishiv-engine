@@ -51,13 +51,13 @@ async fn the_advice_of_a_history_with_a_planted_filter_column_is_listed_and_none
         .config("krishiv.history.path", history.path().to_str().unwrap())
         .build()
         .unwrap();
-    let client = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
-    client
-        .conf()
-        .set(
+    let client = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .config(
             "spark.sql.warehouse.dir",
             warehouse.path().to_str().unwrap(),
         )
+        .build()
         .unwrap();
     run(
         &client,

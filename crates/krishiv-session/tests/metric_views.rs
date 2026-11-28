@@ -228,9 +228,10 @@ fn run_step(s: &Session, step: &Value) -> Result<(), String> {
 /// The first step of `case` that does not match, if any.
 fn run_case(case: &Value, profile: SparkProfile) -> Option<String> {
     let dir = tempfile::tempdir().unwrap();
-    let s = Session::builder().profile(profile).build().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", &dir.path().display().to_string())
+    let s = Session::builder()
+        .profile(profile)
+        .config("spark.sql.warehouse.dir", dir.path().display().to_string())
+        .build()
         .unwrap();
     s.conf().set("spark.sql.session.timeZone", "UTC").unwrap();
     let db = case["database"].as_str().unwrap_or_default();

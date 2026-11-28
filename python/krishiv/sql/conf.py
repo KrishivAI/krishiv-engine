@@ -49,6 +49,10 @@ class RuntimeConfig:
         if value is not None:
             return value
         if default is _UNSET:
+            # A key Spark registers and Krishiv does not answers Spark's default; an optional one, None (SV-3).
+            found, spark_value = self._session.conf_get_as_spark(key)
+            if found:
+                return spark_value
             raise SparkNoSuchElementException(
                 f'[SQL_CONF_NOT_FOUND] The SQL config "{key}" cannot be found. Please verify that the config exists. '
                 "SQLSTATE: 42K0I",
@@ -63,8 +67,10 @@ class RuntimeConfig:
         if not isinstance(value, str | int | bool):
             raise not_expected_type("value", "str, int or bool", value)
         text = ("true" if value else "false") if isinstance(value, bool) else str(value)
-        _warn_if_cluster_setting(key, text, stacklevel=2)
+        # Spark refuses a core key such as `spark.executor.memory` at runtime (CANNOT_MODIFY_CONFIG): only a
+        # setting that was taken warns.
         self._set(key, text)
+        _warn_if_cluster_setting(key, text, stacklevel=2)
 
     def _set(self, key: str, text: str) -> None:
         self._session.conf_set(key, text)
@@ -78,7 +84,8 @@ class RuntimeConfig:
         (``spark.conf.set``); static and unknown keys are ``False``, as in Spark."""
         if not isinstance(key, str):
             raise not_expected_type("key", "str", key)
-        return self._session.conf_is_registered(key) and self._session.conf_is_modifiable(key)
+        registered = self._session.conf_is_registered(key) or self._session.conf_is_spark_session_key(key)
+        return registered and self._session.conf_is_modifiable(key)
 
     @property
     def getAll(self) -> dict[str, str]:

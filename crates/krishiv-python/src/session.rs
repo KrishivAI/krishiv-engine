@@ -580,6 +580,26 @@ impl PySession {
         self.inner.conf().get(key)
     }
 
+    /// What Spark's `spark.conf.get(key)` answers (acceptance SV-3): `(found, value)`; a key Spark registers
+    /// and Krishiv does not answers Spark's default, `(true, None)` for an optional one, and `(false, None)`
+    /// is `SQL_CONF_NOT_FOUND`.
+    fn conf_get_as_spark(&self, key: &str) -> (bool, Option<String>) {
+        match self.inner.conf().get_as_spark(key) {
+            krishiv_session::SparkConfValue::Value(v) => (true, Some(v)),
+            krishiv_session::SparkConfValue::NoValue => (true, None),
+            krishiv_session::SparkConfValue::NotFound => (false, None),
+        }
+    }
+
+    /// Whether `key` is a non-static entry Spark registers and Krishiv does not (acceptance SV-3): Spark's
+    /// `isModifiable` is true for it.
+    fn conf_is_spark_session_key(&self, key: &str) -> bool {
+        self.inner
+            .conf()
+            .spark_entry(key)
+            .is_some_and(|e| !e.is_static)
+    }
+
     fn conf_set(&self, py: Python<'_>, key: &str, value: &str) -> PyResult<()> {
         self.inner.conf().set(key, value).map_err(|e| to_py(py, &e))
     }

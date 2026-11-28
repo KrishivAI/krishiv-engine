@@ -31,7 +31,23 @@ fn people() -> (SchemaRef, RecordBatch) {
 }
 
 fn session() -> Session {
-    let s = Session::new().unwrap();
+    with_people(Session::new().unwrap())
+}
+
+/// [`session`] with its warehouse in `warehouse` (a static key: set when the session is built).
+fn session_in(warehouse: &tempfile::TempDir) -> Session {
+    with_people(
+        Session::builder()
+            .config(
+                "spark.sql.warehouse.dir",
+                warehouse.path().to_str().unwrap(),
+            )
+            .build()
+            .unwrap(),
+    )
+}
+
+fn with_people(s: Session) -> Session {
     let (schema, batch) = people();
     s.register_batches("people", schema, vec![batch]).unwrap();
     s
@@ -252,14 +268,8 @@ fn overwrites_and_clustered_creates_are_unsupported() {
 
 #[test]
 fn options_and_properties_reach_the_table_and_the_name_may_be_qualified() {
-    let s = session();
     let warehouse = tempfile::tempdir().unwrap();
-    s.conf()
-        .set(
-            "spark.sql.warehouse.dir",
-            warehouse.path().to_str().unwrap(),
-        )
-        .unwrap();
+    let s = session_in(&warehouse);
     block_on(
         s.table("people")
             .write_to_table("spark_catalog.default.q")

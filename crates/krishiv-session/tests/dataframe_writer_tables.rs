@@ -895,13 +895,13 @@ fn sql_insert_into_bucketed_tables_places_rows_in_spark_buckets() {
         "CREATE TABLE sb (id INT, name STRING) USING parquet CLUSTERED BY (id) INTO 4 BUCKETS",
         "CREATE TABLE sb (id INT, name STRING, p INT) USING parquet PARTITIONED BY (p) CLUSTERED BY (id) INTO 4 BUCKETS",
     ] {
-        let s = Session::new().unwrap();
         let warehouse = tempfile::tempdir().unwrap();
-        s.conf()
-            .set(
+        let s = Session::builder()
+            .config(
                 "spark.sql.warehouse.dir",
                 warehouse.path().to_str().unwrap(),
             )
+            .build()
             .unwrap();
         block_on(block_on(s.sql(ddl)).unwrap().collect()).unwrap();
         let cols = if ddl.contains("PARTITIONED") {
@@ -946,13 +946,13 @@ fn rows_land_in_the_bucket_spark_puts_them_in() {
         (vec!["id"], "pmod(hash(id), 4)"),
         (vec!["name", "id"], "pmod(hash(name, id), 4)"),
     ] {
-        let s = Session::new().unwrap();
         let warehouse = tempfile::tempdir().unwrap();
-        s.conf()
-            .set(
+        let s = Session::builder()
+            .config(
                 "spark.sql.warehouse.dir",
                 warehouse.path().to_str().unwrap(),
             )
+            .build()
             .unwrap();
         let df = block_on(s.sql(
             "SELECT CAST(id AS INT) AS id, CAST(concat('n', id % 5) AS STRING) AS name FROM range(0, 40)",
@@ -985,13 +985,13 @@ fn rows_land_in_the_bucket_spark_puts_them_in() {
         assert!(seen.iter().all(|b| *b < 4), "{seen:?}");
     }
     // Spark's `hash(1)` is -559580957, so `pmod(hash(1), 4)` is 3: the row `id = 1` is in bucket 3.
-    let s = Session::new().unwrap();
     let warehouse = tempfile::tempdir().unwrap();
-    s.conf()
-        .set(
+    let s = Session::builder()
+        .config(
             "spark.sql.warehouse.dir",
             warehouse.path().to_str().unwrap(),
         )
+        .build()
         .unwrap();
     let one = block_on(s.sql("SELECT CAST(1 AS INT) AS id")).unwrap();
     block_on(one.write().bucket_by(4, ["id"]).save_as_table("one")).unwrap();

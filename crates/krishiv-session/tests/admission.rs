@@ -517,8 +517,10 @@ async fn a_query_reading_only_system_tables_skips_admission() {
 async fn the_request_carries_the_estimate_for_a_controller_that_wants_it() {
     let gate = Gate::new();
     gate.first.store(false, Ordering::SeqCst);
+    let dir = tempfile::tempdir().unwrap();
     let s = Session::builder()
         .admission_controller(Arc::<Gate>::clone(&gate))
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
         .build()
         .unwrap();
     s.sql("SELECT 1 AS one")
@@ -535,10 +537,6 @@ async fn the_request_carries_the_estimate_for_a_controller_that_wants_it() {
     assert!(gate.uses_estimate());
     // A scan of a table with statistics: the request carries the same estimate as
     // `estimate_sql` of that query, not a trivial or stale one.
-    let dir = tempfile::tempdir().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
     for sql in [
         "CREATE TABLE t (a INT, b STRING) USING parquet",
         "INSERT INTO t VALUES (1, 'x'), (2, 'y'), (3, 'z')",

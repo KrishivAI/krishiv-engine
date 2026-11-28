@@ -145,6 +145,16 @@ fn set_returns_spark_rows_and_sets() {
     // An unset key shows `<undefined>`, as in Spark.
     let (_, found) = rows(&s, "SET my.app.missing");
     assert_eq!(found, [vec!["my.app.missing", "<undefined>"]]);
+    // SV-3: a key Spark 4.3.0 registers and Krishiv does not shows Spark's default (the arrow key through
+    // the key it falls back to); an optional one `<undefined>`. Spark 4.3.0's `SET <key>` shows the same.
+    for (key, want) in [
+        ("spark.sql.execution.arrow.pyspark.enabled", "true"),
+        ("spark.sql.execution.arrow.maxRecordsPerBatch", "10000"),
+        ("spark.sql.adaptive.customCostEvaluatorClass", "<undefined>"),
+    ] {
+        let (_, found) = rows(&s, &format!("SET {key}"));
+        assert_eq!(found, [vec![key, want]], "{key}");
+    }
 }
 
 #[test]
@@ -315,6 +325,110 @@ fn reset_restores_the_session() {
     let mut keys: Vec<&str> = listed.iter().map(|r| r[0].as_str()).collect();
     keys.sort_unstable();
     assert_eq!(keys, ["krishiv.sql.ansi.enabled", "my.app.keep"]);
+}
+
+/// A session reads the Spark defaults of its profile's release: Spark 4.1.4 and 3.5.9 answer `false` for the
+/// Arrow key a PySpark client reads (through its fallback), 4.3.0 `true`.
+#[test]
+fn an_unset_spark_key_answers_the_default_of_the_profile_release() {
+    use krishiv_plan::analyzer::SparkProfile;
+    for (profile, want) in [
+        (SparkProfile::V3_5, "false"),
+        (SparkProfile::V4_1, "false"),
+        (SparkProfile::V4_3, "true"),
+    ] {
+        let s = Session::builder().profile(profile).build().unwrap();
+        let key = "spark.sql.execution.arrow.pyspark.enabled";
+        assert_eq!(
+            rows(&s, &format!("SET {key}")).1,
+            [vec![key, want]],
+            "{profile:?}"
+        );
+        assert_eq!(
+            s.conf().get_as_spark(key),
+            krishiv_session::SparkConfValue::Value(want.to_owned()),
+            "{profile:?}"
+        );
+    }
+}
+
+/// Spark 4.3.0 (Connect, 2026-11-28): `spark.conf.set`, `spark.conf.unset`, `SET k=v` and `RESET k` of a
+/// static SQL key are `CANNOT_MODIFY_STATIC_CONFIG`, even with the value it has; of a core Spark key
+/// `CANNOT_MODIFY_CONFIG`; `SET k` and `RESET` succeed and `isModifiable` is false for both. A builder sets them.
+#[test]
+fn static_and_core_spark_keys_are_set_when_the_session_is_built() {
+    let dir = tempfile::tempdir().unwrap();
+    let wh = dir.path().to_str().unwrap();
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", wh)
+        .build()
+        .unwrap();
+    assert_eq!(
+        rows(&s, "SET spark.sql.warehouse.dir").1,
+        [vec!["spark.sql.warehouse.dir", wh]]
+    );
+    for key in [
+        "spark.sql.warehouse.dir",
+        "spark.sql.globalTempDatabase",
+        "spark.python.sql.dataFrameDebugging.enabled",
+    ] {
+        assert!(!s.conf().is_modifiable(key), "{key}");
+        let e = s.conf().set(key, "x").unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::CannotModifyStaticConfig,
+            "{key}"
+        );
+        assert!(
+            e.to_string().contains(&format!(
+                "Cannot modify the value of the static Spark config: \"{key}\"."
+            )),
+            "{e}"
+        );
+        assert_eq!(
+            class(s.conf().unset(key)),
+            ErrorClass::CannotModifyStaticConfig,
+            "{key}"
+        );
+        assert_eq!(
+            class(block_on(s.sql(&format!("SET {key}=x")))),
+            ErrorClass::CannotModifyStaticConfig
+        );
+        assert_eq!(
+            class(block_on(s.sql(&format!("RESET {key}")))),
+            ErrorClass::CannotModifyStaticConfig
+        );
+    }
+    assert_eq!(
+        class(s.conf().set("spark.sql.warehouse.dir", wh)),
+        ErrorClass::CannotModifyStaticConfig
+    );
+    for key in ["spark.executor.memory", "spark.ui.port"] {
+        assert!(!s.conf().is_modifiable(key), "{key}");
+        let e = s.conf().set(key, "1g").unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::CannotModifyConfig, "{key}");
+        assert!(
+            e.to_string().contains(&format!(
+                "Cannot modify the value of the Spark config: \"{key}\".\nSee also \
+                 'https://spark.apache.org/docs/latest/sql-migration-guide.html#ddl-statements'."
+            )),
+            "{e}"
+        );
+        assert_eq!(class(s.conf().unset(key)), ErrorClass::CannotModifyConfig);
+        assert_eq!(
+            class(block_on(s.sql(&format!("SET {key}=1g")))),
+            ErrorClass::CannotModifyConfig
+        );
+        assert_eq!(
+            class(block_on(s.sql(&format!("RESET {key}")))),
+            ErrorClass::CannotModifyConfig
+        );
+    }
+    // A key no Spark entry registers stays settable, as in Spark.
+    s.conf().set("spark.sql.no.such", "1").unwrap();
+    s.conf().set("spark.yarn.queue", "q").unwrap();
+    block_on(s.sql("RESET")).unwrap();
+    assert_eq!(s.conf().get("spark.sql.warehouse.dir").as_deref(), Some(wh));
 }
 
 #[test]
