@@ -82,9 +82,9 @@ impl Datetimes {
                 (None, Purpose::Parse | Purpose::ParseNtz) => Ok(None),
             }
         };
-        // Under LEGACY (JSON only: no other format has the option) reading
+        // Under LEGACY (the CSV and JSON options carry the policy) reading
         // takes `FastDateFormat` patterns, Spark's legacy defaults when none
-        // is named (`JSONOptions.dateFormatInRead`/`timestampFormatInRead`).
+        // is named (`JSONOptions`/`CSVOptions` `dateFormatInRead`, `timestampFormatInRead`).
         let legacy =
             matches!(purpose, Purpose::Parse | Purpose::ParseNtz) && crate::text::legacy_parser(o);
         let (date, timestamp) = if legacy {
@@ -113,6 +113,16 @@ impl Datetimes {
             })
             .map(|p| DateTimePattern::new(p, purpose));
         let explicit = o.bool("enableDateTimeParsingFallback");
+        // Spark has no lenient default date reader: without `dateFormat` it
+        // reads `yyyy-MM-dd` and leans on the fallback, so turning the
+        // fallback off leaves the strict pattern (`2024-01-02 03:04:05` is
+        // null; Spark 4.2.1 and 4.3.0 runs, `time-text-profiles.json`).
+        let date = match (date, explicit, purpose) {
+            (None, Some(false), Purpose::Parse | Purpose::ParseNtz) => {
+                Some(DateTimePattern::new(DATE_PATTERN, purpose)?)
+            }
+            (date, _, _) => date,
+        };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
