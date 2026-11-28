@@ -1,0 +1,207 @@
+name: Publish the Docker image
+
+# 0.3 release (owner 2026-11-23). MANUAL ONLY: this workflow runs when the maintainer dispatches it on a `v*` tag
+# (Actions tab, "Run workflow", pick the tag) and at no other time: never on push, merge, tag creation or schedule
+# (xtask/tests/policy.rs keeps it that way). Publishing is a hard stop that needs the owner's explicit go.
+#
+# Gates: the `ghcr` environment (required reviewers; `v*` tags only) and the ref check below (a `v*` tag, never main).
+# It pushes ghcr.io/krishivai/krishiv:<version>, :<major.minor> and :latest (a pre-release tag such as v0.3.0-rc1 pushes
+# only :<version>), one multi-arch manifest (linux/amd64 and linux/arm64) built from docker/Dockerfile, each platform on a
+# native runner (no QEMU), with a BuildKit SBOM and max-mode provenance on every platform image plus a GitHub build-provenance
+# attestation of the manifest (verify with `gh attestation verify oci://ghcr.io/krishivai/krishiv:<version> --repo
+# KrishivAI/krishiv-engine`). Auth is the run's GITHUB_TOKEN with `packages: write`; no secret. After the first push the
+# owner makes the GHCR package public (package settings).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-docker
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/krishivai/krishiv
+
+jobs:
+  # Publishing needs every gate of ci.yml green on the exact tag being published.
+  ci:
+    if: github.repository == 'KrishivAI/krishiv-engine' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    uses: $/.github/workflows/ci.yml
+
+  build-amd64:
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment:
+      name: ghcr
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and push this platform by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          build-args: KRISHIV_GIT_SHA=${{ github.sha }}
+          sbom: true
+          provenance: mode=max
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Keep the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-amd64
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  build-arm64:
+    needs: ci
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    environment:
+      name: ghcr
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      # The fat-LTO link of `krishiv` needs more memory than this runner has: without swap the
+      # runner is shut down during the link (same step as docker.yml's image-arm64).
+      - name: Add swap for the release link
+        run: |
+          sudo fallocate -l 8G /swap-link
+          sudo chmod 600 /swap-link
+          sudo mkswap /swap-link
+          sudo swapon /swap-link
+          free -h
+          df -h /
+      - name: Build and push this platform by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/arm64
+          build-args: KRISHIV_GIT_SHA=${{ github.sha }}
+          sbom: true
+          provenance: mode=max
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Keep the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-arm64
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [build-amd64, build-arm64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: ghcr
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Tags from the git tag
+        id: tags
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/tags/v* ]] || { echo "::error::only a v* tag publishes the image"; exit 1; }
+          version="${REF_NAME#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::$REF_NAME is not vMAJOR.MINOR.PATCH[-pre]"; exit 1; }
+          tags="$IMAGE:$version"
+          if [[ "$version" != *-* ]]; then
+            tags="$tags $IMAGE:${version%.*} $IMAGE:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Merge the platform images into one manifest list
+        id: manifest
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          set -euo pipefail
+          test "$(ls | wc -l)" -eq 2 || { echo "::error::expected an amd64 and an arm64 digest"; ls; exit 1; }
+          args=()
+          for t in $TAGS; do args+=(-t "$t"); done
+          # shellcheck disable=SC2046
+          docker buildx imagetools create "${args[@]}" $(printf "$IMAGE@sha256:%s " *)
+          first="${TAGS%% *}"
+          docker buildx imagetools inspect "$first"
+          digest="$(docker buildx imagetools inspect "$first" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Attest build provenance of the manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/krishivai/krishiv
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true

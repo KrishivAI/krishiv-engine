@@ -9,7 +9,7 @@ description: "Extract the time value from time/session window column which can b
 Extract the time value from time/session window column which can be used for event time value of window.
 The extracted time is (window.end - 1) which reflects the fact that the aggregating
 windows have exclusive upper bound - [start, end)
-See <a href="https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html#window-operations-on-event-time">'Window Operations on Event Time'</a> in Structured Streaming guide doc for detailed explanation and examples.
+See ['Window Operations on Event Time'](https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html#window-operations-on-event-time) in Structured Streaming guide doc for detailed explanation and examples.
 
 **Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 

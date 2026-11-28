@@ -9,6 +9,11 @@
 //! `sum`, `avg`, `min` and `max` need no duplication factor, and the same
 //! accumulators run, so result types and rounding do not change.
 //!
+//! An aggregate without calls (a distinct) pushes its groups the same way:
+//! the partial aggregate removes repeated groups below the join, the
+//! aggregate above the rest. A distinct over a semi or anti join (`INTERSECT`,
+//! `EXCEPT`) first moves below it, onto both inputs ([`semi`]).
+//!
 //! # When it applies
 //!
 //! Calls ([`refusal_of_call`]). Every aggregate call must be one that exports
@@ -16,7 +21,9 @@
 //!
 //! 1. Its arguments read only `S`, are deterministic, hold no subquery and
 //!    cannot raise under ANSI: the join may drop a row Spark never evaluated
-//!    the argument on.
+//!    the argument on. Exact decimal `+`, `-` and `*` (the result type holds
+//!    every value) and their division by a nonzero integral literal that keeps
+//!    the integral digits never raise ([`decimal_never_raises`]).
 //! 2. It cannot be affected by summation order. Spark checks overflow in
 //!    processing order, so a sum runs here only where no buffer can overflow:
 //!    `sum` of at most 32-bit integers into `bigint` (fewer than 2^32 rows per
@@ -42,13 +49,13 @@
 //! - the groups, the product of the keys' distinct counts, are at most
 //!   `1 / `[`MIN_REDUCTION`] of `S`'s rows;
 //! - at most one key beyond the join's own;
-//! - the other side is a table read whole (only filters that a join key is
-//!   not NULL, as inferred join filters add them, may sit on it). A filtered
-//!   dimension prunes the aggregated side through a runtime filter, which pays
-//!   more than grouping and which a smaller aggregate could take away by
-//!   becoming the join's build side; estimates cannot see this, as they read a
-//!   key's matches from its distinct counts (TPC-DS q12, q43 and q63 ran
-//!   1.2–1.4x slower);
+//! - the other side is a table read whole (only filters that a plain `=` key
+//!   of the join is not NULL, as inferred join filters add them, may sit on
+//!   it). A filtered dimension prunes the aggregated side through a runtime
+//!   filter, which pays more than grouping and which a smaller aggregate could
+//!   take away by becoming the join's build side; estimates cannot see this, as
+//!   they read a key's matches from its distinct counts (TPC-DS q12, q43 and
+//!   q63 ran 1.2–1.4x slower);
 //! - every key's distinct count is known (never [`StatSource::Guess`]): Umbra
 //!   measured this rewrite over 10× slower on TPC-H Q17 when it fires blind.
 //!
@@ -64,9 +71,11 @@ use krishiv_common::error::KrishivError;
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
-    exact_decimal, may_raise, partial_state_columns,
+    decimal_never_raises, exact_decimal, may_raise, partial_state_columns,
 };
 use krishiv_types::DataType;
+
+mod semi;
 
 use crate::dag;
 use crate::estimate::Estimator;
@@ -107,39 +116,97 @@ pub(crate) fn rewrite(
     yields: Yield,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let mut memo = Default::default();
-    let mut next = max_id(&root, &mut memo).saturating_add(1);
+    let mut pass = Pass {
+        next: max_id(&root, &mut memo).saturating_add(1),
+        notes: Vec::new(),
+        probe: yields
+            .payload_above
+            .then(|| payload_above::Probe::new(&root, stats)),
+        group_code: yields.group_code,
+        expand,
+    };
     let mut est = Estimator::with_propagation(stats, propagate);
-    let mut notes = Vec::new();
-    let mut probe = yields
-        .payload_above
-        .then(|| payload_above::Probe::new(&root, stats));
     let out = dag::rewrite_up(root, &mut |p| {
-        // A later rule that takes the aggregate goes first ([`Yield`]).
-        if probe.as_mut().is_some_and(|pr| pr.takes(&p, &mut est)) {
-            notes.push("not applied: PayloadAboveAggregate takes the aggregate".to_owned());
+        if pass.yielded(&p, &mut est) {
             return Ok(p);
         }
-        if yields
+        // The distincts the split moves onto the join's inputs are tried as
+        // any other aggregate.
+        let split = semi::split(&p, &mut est, &mut |d, est| {
+            if pass.yielded(&d, est) {
+                d
+            } else {
+                pass.attempt(d, est)
+            }
+        });
+        if let Some(split) = split {
+            return Ok(match split {
+                Ok(s) => {
+                    pass.notes.push(s.note);
+                    s.plan
+                }
+                Err(why) => {
+                    pass.notes.push(format!("distinct not split: {why}"));
+                    p
+                }
+            });
+        }
+        Ok(pass.attempt(p, &mut est))
+    })?;
+    Ok((out, pass.notes))
+}
+
+/// What one [`rewrite`] carries between aggregates.
+struct Pass<'a> {
+    /// The next free attribute id.
+    next: u64,
+    /// `EXPLAIN VERBOSE` lines.
+    notes: Vec<String>,
+    /// Asks `PayloadAboveAggregate` whether it takes an aggregate ([`Yield`]).
+    probe: Option<payload_above::Probe<'a>>,
+    /// [`Yield::group_code`].
+    group_code: Option<(bool, usize)>,
+    /// Whether an aggregate over an `Expand` is pre-aggregated ([`expand`]).
+    expand: bool,
+}
+
+impl Pass<'_> {
+    /// Whether a later rule takes `p`, which then goes to it first ([`Yield`]).
+    fn yielded(&mut self, p: &Arc<LogicalPlan>, est: &mut Estimator<'_>) -> bool {
+        if self.probe.as_mut().is_some_and(|pr| pr.takes(p, est)) {
+            self.notes
+                .push("not applied: PayloadAboveAggregate takes the aggregate".to_owned());
+            return true;
+        }
+        if self
             .group_code
-            .is_some_and(|(force, min)| group_code::takes(&p, &mut est, force, min))
+            .is_some_and(|(force, min)| group_code::takes(p, est, force, min))
         {
-            notes.push("not applied: GroupKeyCode takes the aggregate".to_owned());
-            return Ok(p);
+            self.notes
+                .push("not applied: GroupKeyCode takes the aggregate".to_owned());
+            return true;
         }
+        false
+    }
+
+    /// `p` with its aggregate pushed below its join, or `p` (the reason in
+    /// the notes).
+    fn attempt(&mut self, p: Arc<LogicalPlan>, est: &mut Estimator<'_>) -> Arc<LogicalPlan> {
+        let next = &mut self.next;
         let tried = match Shape::of(&p) {
-            Some(shape) => shape.push(shape.join, &mut est, &mut next).or_else(|why| {
+            Some(shape) => shape.push(shape.join, est, next).or_else(|why| {
                 // The dimension the keys need may sit below another one.
                 shape
                     .rotated()
-                    .and_then(|join| shape.push(&join, &mut est, &mut next).ok())
+                    .and_then(|join| shape.push(&join, est, next).ok())
                     .ok_or(why)
             }),
             None => Err(String::new()),
         };
         // Where no join takes the calls, grouping sets still aggregate their
         // input before the expansion repeats it ([`expand`]).
-        let tried = match (tried, expand.then(|| Shape::over_expand(&p)).flatten()) {
-            (Err(why), Some(shape)) => shape.pre_aggregate(&mut est, &mut next).map_err(|below| {
+        let tried = match (tried, self.expand.then(|| Shape::over_expand(&p)).flatten()) {
+            (Err(why), Some(shape)) => shape.pre_aggregate(est, next).map_err(|below| {
                 if why.is_empty() {
                     format!("below the Expand: {below}")
                 } else {
@@ -151,22 +218,22 @@ pub(crate) fn rewrite(
         match tried {
             Ok((pushed, note)) => {
                 // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
-                if next > MAX_ID {
-                    notes.push("not applied: the plan has no attribute ids left".to_owned());
-                    return Ok(p);
+                if self.next > MAX_ID {
+                    self.notes
+                        .push("not applied: the plan has no attribute ids left".to_owned());
+                    return p;
                 }
-                notes.push(note);
-                Ok(pushed)
+                self.notes.push(note);
+                pushed
             }
             // Not an aggregate this rule reads.
-            Err(why) if why.is_empty() => Ok(p),
+            Err(why) if why.is_empty() => p,
             Err(why) => {
-                notes.push(format!("not applied: {why}"));
-                Ok(p)
+                self.notes.push(format!("not applied: {why}"));
+                p
             }
         }
-    })?;
-    Ok((out, notes))
+    }
 }
 
 /// The rules after this one that an aggregate goes to first: where
@@ -232,10 +299,9 @@ impl<'a> Shape<'a> {
         est: &mut Estimator<'_>,
         next: &mut u64,
     ) -> Result<(Arc<LogicalPlan>, String), String> {
+        // No calls (a distinct): the partial aggregate below only removes
+        // repeated groups, which the aggregate above removes anyway.
         let calls = distinct_calls(self.outputs);
-        if calls.is_empty() {
-            return Err("no aggregate call".to_owned());
-        }
         let mut args = Attrs::default();
         for (_, f) in &calls {
             for a in &f.args {
@@ -521,7 +587,10 @@ fn states_of(
 /// Such a filter is what inferred join filters add to a dimension (#598). It
 /// keeps every row the inner equi-join can match, so its runtime filter
 /// prunes nothing a NULL key would not lose anyway, and the reason to refuse
-/// a filtered dimension does not hold (study 54, TPC-DS q22).
+/// a filtered dimension does not hold (TPC-DS q11, q74 and q04's `customer`).
+/// A not-NULL filter on any other column (`d.attr IS NOT NULL` on a sparse
+/// column) or on a null-safe (`<=>`) key, where a NULL key does match, prunes
+/// rows the join would keep: that dimension is filtered.
 fn read_whole(p: &LogicalPlan, keys: &Attrs) -> bool {
     match &p.node {
         PlanNode::Project { input, .. } => read_whole(input, keys),
@@ -781,8 +850,10 @@ fn raises_beyond_exact_decimal(e: &Expr) -> bool {
 /// With `same_rows` the call runs on exactly the rows the aggregate above
 /// reads (below an `Expand`, which drops none), so an argument may also be
 /// exact decimal arithmetic ([`exact_decimal`], under `coalesce` too: q67's
-/// `coalesce(price * quantity, 0)`), which raises on no row. Below a join it
-/// stays [`may_raise`] alone, the rule this aggregation was measured with.
+/// `coalesce(price * quantity, 0)`), which raises on no row. Below a join,
+/// where the join may drop rows Spark evaluated the argument on, an argument
+/// that raises on no row is just as safe: [`decimal_never_raises`] (exact
+/// decimal arithmetic and its division by a whole literal, TPC-DS q04).
 pub(crate) fn refusal_of_call(
     f: &ResolvedFunction,
     side: &RelStats,
@@ -798,7 +869,7 @@ pub(crate) fn refusal_of_call(
             || if same_rows {
                 raises_beyond_exact_decimal(a)
             } else {
-                may_raise(a, true)
+                may_raise(a, true) && !decimal_never_raises(a)
             }
     }) {
         return Err(format!("{name}'s argument can raise or is not plain"));

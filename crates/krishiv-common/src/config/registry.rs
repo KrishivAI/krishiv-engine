@@ -2,9 +2,10 @@
 //! The config entries. Add new entries here and to [`REGISTRY`].
 
 use super::registry_join::{
-    EXEC_COALESCE_INPUT, EXEC_JOIN_DIRECT_INDEX, EXEC_JOIN_FUSE_PROBE_SELECT,
-    EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT, EXEC_JOIN_SMJ_BUFFER_BYTES,
-    EXEC_JOIN_STRATEGY, SQL_ASOF_JOIN_ENABLED, SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
+    EXEC_COALESCE_INPUT, EXEC_DATAFLOW_SCHEDULING, EXEC_JOIN_DIRECT_INDEX,
+    EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT,
+    EXEC_JOIN_SMJ_BUFFER_BYTES, EXEC_JOIN_STRATEGY, SQL_ASOF_JOIN_ENABLED,
+    SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
 };
 use std::borrow::Cow;
 use std::time::Duration;
@@ -80,14 +81,14 @@ pub use runtime_filter::{
 };
 pub use runtime_filter_bloom::{
     RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_EQUATED_SITES,
-    RUNTIME_FILTER_RESIDUAL_BOUNDS,
+    RUNTIME_FILTER_RESIDUAL_BOUNDS, RUNTIME_FILTER_SMALL_TABLE_WAIT,
 };
 // Every public item of `server` is a config entry (Connect, Flight SQL, server).
 pub use server::*;
 pub use sql_session::{
-    ANSI_ENABLED, CTE_PRECEDENCE_POLICY, MAP_KEY_DEDUP_POLICY, SCHEMA_LEVEL_COLLATIONS_ENABLED,
-    SESSION_TIME_ZONE, SQL_DEFAULT_PATH, SQL_PATH_ENABLED, STORE_ASSIGNMENT_POLICY,
-    TIME_TRAVEL_AT_SYNTAX_ENABLED,
+    ANSI_ENABLED, CTE_PRECEDENCE_POLICY, IO_TEXT_INFER_TIME, IO_TEXT_TIME_NANOS,
+    MAP_KEY_DEDUP_POLICY, SCHEMA_LEVEL_COLLATIONS_ENABLED, SESSION_TIME_ZONE, SQL_DEFAULT_PATH,
+    SQL_PATH_ENABLED, STORE_ASSIGNMENT_POLICY, TIME_TRAVEL_AT_SYNTAX_ENABLED,
 };
 pub use ui_embed::{
     UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS, UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL,
@@ -117,6 +118,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ARROW_USE_LARGE_VAR_TYPES,
     &ARROW_PYSPARK_SELF_DESTRUCT_ENABLED,
     &SESSION_TIME_ZONE,
+    &IO_TEXT_TIME_NANOS,
+    &IO_TEXT_INFER_TIME,
     &SQL_PATH_ENABLED,
     &SCHEMA_LEVEL_COLLATIONS_ENABLED,
     &TIME_TRAVEL_AT_SYNTAX_ENABLED,
@@ -143,6 +146,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     &EXEC_JOIN_FUSE_PROBE_SELECT,
     &EXEC_COALESCE_INPUT,
+    &EXEC_DATAFLOW_SCHEDULING,
     &EXEC_JOIN_IDLE_SPILL_AFTER,
     &SQL_ASOF_JOIN_ENABLED,
     &SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
@@ -226,6 +230,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
     &RUNTIME_FILTER_EQUATED_SITES,
     &RUNTIME_FILTER_RESIDUAL_BOUNDS,
+    &RUNTIME_FILTER_SMALL_TABLE_WAIT,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -564,9 +569,15 @@ pub static MEMORY_LIMIT: ConfigEntry = ConfigEntry {
     doc: "Memory available to query execution in this process: the limit of the root memory \
           pool. Operators reserve memory before allocating and spill when the limit is reached. \
           When unset: 80% of the effective memory limit (the tightest cgroup limit, else \
-          physical memory), or 2 GiB where that cannot be determined. A value above that \
-          effective limit is not honoured (the kernel would kill the process before the engine \
-          spills): the default is used instead, with a warning.",
+          physical memory), lowered so the pool plus what the process may hold beyond it (an \
+          eighth of the pool and 64 MiB) leaves at least 384 MiB, but never under half of it \
+          (so 512 MiB in a 1 GiB container, about 1.39 GiB in 2 GiB, 80% from about 4.4 GiB), \
+          or 2 GiB where that cannot be determined. A value above that effective limit is not \
+          honoured (the kernel would kill the process before the engine spills): the default is \
+          used instead, with a warning. A value at or just under the effective limit is honoured \
+          but leaves no room for the memory the process uses \
+          outside the pool (allocator overhead, memory used without a reservation), so the \
+          kernel can still kill the process: leave headroom, as the default does.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",

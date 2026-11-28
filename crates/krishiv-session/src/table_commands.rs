@@ -372,10 +372,7 @@ impl Session {
         let found = self.state.catalog.store.alter_namespace(&name, &*change);
         drop(change);
         if !found {
-            return Err(SchemaNotFound {
-                schema_name: format!("`{name}`"),
-            }
-            .into());
+            return Err(crate::catalog::schema_not_found(&name));
         }
         self.empty_frame().await
     }
@@ -426,10 +423,7 @@ impl Session {
             }
             Err(DropNamespaceError::Missing) if n.if_exists => {}
             Err(DropNamespaceError::Missing) => {
-                return Err(SchemaNotFound {
-                    schema_name: format!("`{name}`"),
-                }
-                .into());
+                return Err(crate::catalog::schema_not_found(&name));
             }
             Err(DropNamespaceError::NotEmpty) => {
                 return Err(SchemaNotEmpty {
@@ -496,19 +490,32 @@ impl Session {
                     .into());
                 }
             }
-        } else if self.names_a_system_namespace(&parts) {
+        } else if self.names_a_system_namespace() {
             return Err(SchemaNotFound {
                 schema_name: quoted(&[vec!["system".to_owned()], parts].concat()),
+            }
+            .into());
+        } else if parts.len() > 1
+            && (u.kind.is_some() || parts.first().and_then(|p| canonical(p)).is_none())
+        {
+            // No catalog has the first part's name, or the statement has a namespace keyword
+            // (NAMESPACE, SCHEMA or DATABASE), under which no part is a catalog: every part is a
+            // namespace of the session catalog, which has none that deep. Spark 4.3.0: `USE dummy.x`
+            // and `USE NAMESPACE a.b.c` name `spark_catalog`.`dummy`.`x` and
+            // `spark_catalog`.`a`.`b`.`c`; `USE SCHEMA spark_catalog.default` names
+            // `spark_catalog`.`spark_catalog`.`default`, though `USE spark_catalog.default` works.
+            // Under a declared catalog the name is a namespace of that catalog: refused, as the
+            // one-part form is.
+            self.refuse_declared_current()?;
+            return Err(SchemaNotFound {
+                schema_name: quoted(&[vec![crate::catalog::CATALOG.to_owned()], parts].concat()),
             }
             .into());
         }
         let name = self.namespace_name(&u.name, &env)?;
         // One the principal may not list reads as missing (review r2 R4).
         if !self.state.catalog.store.has_namespace(&name) || self.namespace_hidden(&name).await {
-            return Err(SchemaNotFound {
-                schema_name: format!("`{name}`"),
-            }
-            .into());
+            return Err(crate::catalog::schema_not_found(&name));
         }
         self.state
             .catalog
@@ -1770,6 +1777,21 @@ struct InsertTarget<'a> {
     /// The name delta-spark's errors give a Delta table written by path (`` delta.`file:/p` ``);
     /// `None` for a catalog table.
     delta_name: Option<&'a str>,
+    /// `options` are a Delta table's write options ([`delta_options`]), as delta-spark reads
+    /// those of `saveAsTable` append and `writeTo(..).append()`; `insertInto` reads only
+    /// `maxRecordsPerFile` of them (`tests/fixtures/delta-4.4.1/CATALOG-OPTIONS.json`).
+    #[cfg_attr(
+        not(feature = "delta"),
+        expect(dead_code, reason = "read by the Delta write path only")
+    )]
+    delta_writer_options: bool,
+    /// The statement's `INSERT .. WITH (..)` options: a Delta table's write options
+    /// ([`delta_options`]); empty for the DataFrame writers.
+    #[cfg_attr(
+        not(feature = "delta"),
+        expect(dead_code, reason = "read by the Delta write path only")
+    )]
+    sql_options: &'a [(String, String)],
 }
 
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
@@ -1941,6 +1963,8 @@ mod delta;
 mod metric_view;
 #[cfg(feature = "delta")]
 pub(crate) use delta::{delta_write_refused, is_delta_table};
+#[cfg(feature = "delta")]
+mod delta_options;
 #[cfg(feature = "delta")]
 mod delta_writes;
 #[cfg(feature = "delta")]

@@ -138,6 +138,9 @@ enum Col<'a> {
     Int16(Prim<'a, i16>),
     Int32(Prim<'a, i32>),
     Int64(Prim<'a, i64>),
+    /// A nanosecond timestamp (`TIMESTAMP[_NTZ](7..=9)`): Spark hashes its microseconds as a long,
+    /// then the nanoseconds within the microsecond as an int (`TimestampNanosVal`).
+    Nanos(Prim<'a, i64>),
     /// A calendar interval: months, days and nanoseconds.
     /// A calendar interval's struct: its months and microseconds, under the struct's nulls.
     Calendar(Prim<'a, i32>, Prim<'a, i64>, Option<&'a NullBuffer>),
@@ -197,6 +200,9 @@ impl<'a> Col<'a> {
             DataType::Int64 => Self::Int64(Prim::of::<Int64Type>(a)),
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 Self::Int64(Prim::of::<TimestampMicrosecondType>(a))
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                Self::Nanos(Prim::of::<arrow_array::types::TimestampNanosecondType>(a))
             }
             DataType::Duration(TimeUnit::Microsecond) => {
                 Self::Int64(Prim::of::<DurationMicrosecondType>(a))
@@ -282,6 +288,11 @@ impl<'a> Col<'a> {
             Self::Int16(p) => p.fold(i, s, |v, s| H::hash_int(v.into(), s)),
             Self::Int32(p) => p.fold(i, s, H::hash_int),
             Self::Int64(p) => p.fold(i, s, H::hash_long),
+            Self::Nanos(p) => p.fold(i, s, |v, s| {
+                let micros = v.div_euclid(1_000);
+                let within = i32::try_from(v.rem_euclid(1_000)).unwrap_or_default();
+                H::hash_int(within, H::hash_long(micros, s))
+            }),
             // Spark's generated code, which any query over a scan runs: the
             // microseconds, then the months; the days are not hashed (design
             // P2-T001b Q3). Spark's interpreted path, which it uses for a
@@ -376,4 +387,33 @@ fn twos_complement_bytes(v: i128) -> ([u8; 16], usize) {
         .div_ceil(8);
     let start = 16_usize.saturating_sub(usize::try_from(len).unwrap_or(16));
     (v.to_be_bytes(), start)
+}
+
+#[cfg(test)]
+mod nanos_tests {
+    use arrow_array::{Array, Int32Array, Int64Array, TimestampNanosecondArray};
+
+    /// A nanosecond timestamp hashes as Spark's `TimestampNanosVal`: its microseconds (floor) as a
+    /// long, then the nanoseconds within the microsecond as an int, which is the chain of those two
+    /// columns; NULL leaves the seed.
+    #[test]
+    fn nanosecond_timestamps_hash_their_micros_then_the_rest() {
+        let v = [1_577_836_800_123_456_789_i64, -315_619_199_999_999_999];
+        let ns = TimestampNanosecondArray::from(vec![Some(v[0]), Some(v[1]), None]);
+        let micros = Int64Array::from(vec![
+            Some(v[0].div_euclid(1_000)),
+            Some(v[1].div_euclid(1_000)),
+            None,
+        ]);
+        let within = Int32Array::from(vec![Some(789), Some(1), None]);
+        let pair: [&dyn Array; 2] = [&micros, &within];
+        assert_eq!(
+            super::hash(&[&ns], 3).unwrap(),
+            super::hash(&pair, 3).unwrap()
+        );
+        assert_eq!(
+            super::xxhash64(&[&ns], 3).unwrap(),
+            super::xxhash64(&pair, 3).unwrap()
+        );
+    }
 }

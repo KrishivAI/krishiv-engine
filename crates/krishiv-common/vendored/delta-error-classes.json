@@ -129,11 +129,23 @@
     ],
     "sqlState" : "22005"
   },
+  "DELTA_ILLEGAL_OPTION" : {
+    "message" : [
+      "Invalid value '<input>' for option '<name>', <explain>"
+    ],
+    "sqlState" : "42616"
+  },
   "DELTA_INSERT_COLUMN_ARITY_MISMATCH" : {
     "message" : [
       "Cannot write to '<tableName>', <columnName>; target table has <numColumns> column(s) but the inserted data has <insertColumns> column(s)"
     ],
     "sqlState" : "42802"
+  },
+  "DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS" : {
+    "message" : [
+      "Invalid options for idempotent Dataframe writes: <reason>"
+    ],
+    "sqlState" : "42616"
   },
   "DELTA_INVALID_ISOLATION_LEVEL" : {
     "message" : [

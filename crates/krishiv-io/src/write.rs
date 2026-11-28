@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
-use krishiv_memory::Reservation;
+use krishiv_memory::{MemoryError, Reservation};
 use object_store::path::Path;
 
 use krishiv_kernels::cast::{FixedOffset, TimeZoneRules};
@@ -581,7 +581,24 @@ impl FileWriter {
                 let held = held_bytes(f);
                 let grow = held.saturating_sub(self.mem.size());
                 if grow > 0 {
-                    self.mem.grow(grow).await?;
+                    // What is left is the upload's unsent part, which only
+                    // leaves at a full part (at least 5 MiB) or the file's
+                    // end. When spills cannot make room for it, end the file
+                    // (its rest goes as the last part, or one PUT) and go on
+                    // in a new one: cheaper than aborting the query
+                    // (SQL-33: a sort's final merge held the rest of 6 MB).
+                    match self.mem.grow_without_abort(grow).await {
+                        Ok(()) => {}
+                        Err(MemoryError::Exhausted { .. }) => {
+                            tracing::debug!(
+                                held,
+                                reserved = self.mem.size(),
+                                "writer short of memory: ending the file, going on in a new one"
+                            );
+                            self.close_file().await?;
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
         } else {

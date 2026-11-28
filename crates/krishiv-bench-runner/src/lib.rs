@@ -311,8 +311,14 @@ impl RunnerConfig {
 pub struct Runner {
     session: Session,
     tables: Vec<String>,
-    /// `krishiv.memory.limit` in bytes.
+    /// The root memory pool's limit in bytes: `krishiv.memory.limit`, fitted to the process.
     limit: Option<u64>,
+}
+
+/// The limit the root memory pool takes for a configured `krishiv.memory.limit` of `configured` bytes.
+fn pool_limit(configured: u64) -> u64 {
+    let fitted = krishiv_memory::explicit_limit(usize::try_from(configured).unwrap_or(usize::MAX));
+    fitted as u64
 }
 
 impl Runner {
@@ -388,10 +394,12 @@ impl Runner {
                 config.data
             )));
         }
-        // As the session sees it: a `--conf` limit wins over `--memory-limit`.
+        // As the session's root pool has it: a `--conf` limit wins over `--memory-limit`, and a limit
+        // above what the process may use (its cgroup, the machine) is fitted to that.
         let limit = merged
             .get(&krishiv_common::config::MEMORY_LIMIT)
-            .and_then(krishiv_common::config::ConfigValue::as_size);
+            .and_then(krishiv_common::config::ConfigValue::as_size)
+            .map(pool_limit);
         Ok(Self {
             session,
             tables,
@@ -862,6 +870,17 @@ fn one_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::json_opt;
+
+    #[test]
+    fn the_recorded_limit_is_the_pool_s() {
+        // A limit the process may use stands; one above its memory is the pool's fitted limit.
+        assert_eq!(super::pool_limit(1 << 20), 1 << 20);
+        let fitted = krishiv_memory::explicit_limit(usize::MAX) as u64;
+        assert_eq!(super::pool_limit(u64::MAX), fitted);
+        if krishiv_memory::effective_memory_limit().is_some() {
+            assert!(fitted < u64::MAX);
+        }
+    }
 
     #[test]
     fn json_opt_writes_null_for_none() {

@@ -4,11 +4,17 @@
 //! credential, or the key names a secret. Spark repeats the value; Krishiv shows
 //! `*********(redacted)`, a difference toward safety (threat model T-C8). Every other pair keeps
 //! Spark's text. This holds for `RuntimeConf::set` and SQL `SET`, which goes through it.
+//!
+//! The output of SQL `SET` and `SET key` hides what Spark's hides (`SQLConf.redactOptions`), and
+//! `SET -v` a registered secret.
 #![cfg(test)]
 
+use std::sync::Arc;
+
+use arrow_array::{Array, RecordBatch, StringArray, StringViewArray};
 use futures::executor::block_on;
 use krishiv_common::error::{ErrorClass, KrishivError};
-use krishiv_session::Session;
+use krishiv_session::{EngineRuntime, Session};
 
 const REDACTED: &str = "*********(redacted)";
 
@@ -138,4 +144,108 @@ fn a_value_inside_a_secret_like_key_leaves_the_key_readable() {
     let e = s.conf().set(key, "o").unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnknownConfig, "{e}");
     assert!(e.to_string().contains(key), "{e}");
+}
+
+/// The `key` and `value` cells of each row `query` returns.
+fn pairs(s: &Session, query: &str) -> Vec<(String, String)> {
+    let batches: Vec<RecordBatch> = block_on(block_on(s.sql(query)).unwrap().collect()).unwrap();
+    let cell = |b: &RecordBatch, col: usize, row: usize| {
+        let c = b.column(col);
+        c.as_any().downcast_ref::<StringArray>().map_or_else(
+            || {
+                c.as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .unwrap()
+                    .value(row)
+                    .to_owned()
+            },
+            |a| a.value(row).to_owned(),
+        )
+    };
+    batches
+        .iter()
+        .flat_map(|b| (0..b.num_rows()).map(move |i| (cell(b, 0, i), cell(b, 1, i))))
+        .collect()
+}
+
+/// Spark 4.3.0 (`SetCommand` through `SQLConf.redactOptions`; run on the 4.3.0 oracle,
+/// acceptance R1-D-18): `SET key` and `SET` print `*********(redacted)` for a pair whose key or
+/// value matches `spark.redaction.regex` or `spark.sql.redaction.options.regex` (`(?i)url`).
+/// Only the echo of `SET key = value` shows the value.
+#[test]
+fn set_and_set_key_print_no_secret() {
+    let s = Session::new().unwrap();
+    let hidden = [
+        ("spark.my.password", "canary-1"),
+        ("spark.x.token", "canary-2"),
+        ("spark.hadoop.fs.s3a.secret.key", "canary-3"),
+        // The value names a secret-like word; Krishiv's classifier knows the key too.
+        ("fs.azure.account.key.acct", "canary-4"),
+        // `url` in the key: hidden in `SET`, though `Config.get` shows a URL without credentials.
+        ("spark.my.jdbc.URL", "postgres://canary-5/db"),
+        // `url` in the value only.
+        ("spark.my.plain", "canary-6-curl"),
+    ];
+    for (key, value) in hidden {
+        let echo = pairs(&s, &format!("SET {key}={value}"));
+        assert_eq!(
+            echo,
+            [(key.to_owned(), value.to_owned())],
+            "the echo is Spark's"
+        );
+        assert_eq!(
+            pairs(&s, &format!("SET {key}")),
+            [(key.to_owned(), REDACTED.to_owned())]
+        );
+    }
+    block_on(s.sql("SET spark.my.shown=plain-value"))
+        .map(drop)
+        .unwrap();
+    let all = pairs(&s, "SET");
+    for (key, _) in hidden {
+        assert!(
+            all.contains(&(key.to_owned(), REDACTED.to_owned())),
+            "{key}: {all:?}"
+        );
+    }
+    assert!(all.iter().all(|(_, v)| !v.contains("canary")), "{all:?}");
+    // A pair nothing marks is shown, by both statements.
+    assert!(
+        all.contains(&("spark.my.shown".to_owned(), "plain-value".to_owned())),
+        "{all:?}"
+    );
+    assert_eq!(
+        pairs(&s, "SET spark.my.shown"),
+        [("spark.my.shown".to_owned(), "plain-value".to_owned())]
+    );
+    assert_eq!(
+        pairs(&s, "SET spark.my.unset"),
+        [("spark.my.unset".to_owned(), "<undefined>".to_owned())]
+    );
+    // A secret-like key with no value: Spark asks the pattern about the key first, so it prints
+    // the replacement text, not `<undefined>`.
+    assert_eq!(
+        pairs(&s, "SET spark.never.set.password"),
+        [("spark.never.set.password".to_owned(), REDACTED.to_owned())]
+    );
+}
+
+/// `SET -v` lists registered keys with their values. Spark hides nothing there; Krishiv hides the
+/// value of a registered key that holds a secret (a difference toward safety).
+#[test]
+fn set_verbose_hides_a_registered_secret() {
+    let key = "krishiv.access.external.token";
+    let rt = EngineRuntime::builder()
+        .config(key, "env:CANARY_VERBOSE")
+        .build()
+        .unwrap();
+    let s = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let all = pairs(&s, "SET -v");
+    assert!(
+        all.contains(&(key.to_owned(), REDACTED.to_owned())),
+        "{key} is not hidden"
+    );
+    assert!(all.iter().all(|(_, v)| !v.contains("CANARY")));
+    // Other registered keys keep their values.
+    assert!(all.iter().any(|(_, v)| v == "true"));
 }
