@@ -1610,3 +1610,172 @@ fn string_keys_past_a_shared_prefix_order_like_the_tree() {
     }
     assert_eq!(got, want);
 }
+
+/// A source whose one batch is preceded by `wait` of work on the blocking
+/// pool, run through [`super::counted`] as the sort source runs its merge.
+struct PoolWorkSource {
+    wait: std::time::Duration,
+}
+
+struct PoolWorkLocal {
+    query: Arc<QueryContext>,
+    executor: Arc<dyn Executor>,
+    ran: Arc<std::sync::atomic::AtomicU64>,
+    done: bool,
+}
+
+impl Source for PoolWorkSource {
+    fn schema(&self) -> SchemaRef {
+        int_schema()
+    }
+
+    fn global_state(&self, _ctx: &TaskContext) -> crate::Result<crate::operator::GlobalState> {
+        Ok(Arc::new(()))
+    }
+
+    fn max_parallelism(&self, _global: &crate::operator::GlobalState) -> usize {
+        1
+    }
+
+    fn local_state(
+        &self,
+        ctx: &TaskContext,
+        _global: &crate::operator::GlobalState,
+    ) -> crate::Result<crate::operator::LocalState> {
+        Ok(Box::new(PoolWorkLocal {
+            query: Arc::clone(ctx.query()),
+            executor: Arc::clone(ctx.executor()),
+            ran: ctx.blocking_counter(),
+            done: false,
+        }))
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        local: &'a mut crate::operator::LocalState,
+        _global: &'a crate::operator::GlobalState,
+    ) -> futures::future::BoxFuture<'a, crate::Result<Option<Batch>>> {
+        let wait = self.wait;
+        Box::pin(async move {
+            let l = local
+                .downcast_mut::<PoolWorkLocal>()
+                .unwrap_or_else(|| unreachable!("a PoolWork local"));
+            if std::mem::replace(&mut l.done, true) {
+                return Ok(None);
+            }
+            super::counted(&l.query, &l.executor, &l.ran, move || {
+                std::thread::sleep(wait);
+                Ok(())
+            })
+            .await?;
+            let k: ArrayRef = Arc::new(Int64Array::from_iter_values(0..10));
+            Ok(Some(Batch::new(
+                RecordBatch::try_new(int_schema(), vec![k]).unwrap_or_else(|e| unreachable!("{e}")),
+            )))
+        })
+    }
+}
+
+fn real_executor() -> Arc<dyn Executor> {
+    TokioExecutor::new(&crate::ExecutorConfig {
+        compute_threads: 1,
+        io_threads: 1,
+        blocking_threads: 1,
+        io_blocking_threads: 1,
+        release_when_idle: false,
+    })
+    .unwrap_or_else(|e| unreachable!("{e}"))
+}
+
+/// Work a source runs on the blocking pool (a sort source's merge) is the
+/// source's compute time, though its driver's `get_data` was pending
+/// meanwhile; before, it was reported as time blocked on I/O.
+#[tokio::test]
+async fn a_sources_blocking_pool_work_is_compute_time() {
+    use futures::StreamExt;
+    let executor = real_executor();
+    let runner = crate::QueryRunner::new(Arc::clone(&executor));
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        root.child("q", None),
+    );
+    let wait = std::time::Duration::from_millis(300);
+    let plan = Arc::new(crate::testing::Scan(Arc::new(PoolWorkSource { wait })));
+    let mut out = runner.execute(plan, Arc::clone(&query)).await.unwrap();
+    let mut rows = 0;
+    while let Some(b) = out.next().await {
+        rows += b.unwrap().num_rows();
+    }
+    drop(out);
+    query.finished().await;
+    assert_eq!(rows, 10);
+    let metrics = query.metrics();
+    let m = &metrics
+        .operators
+        .values()
+        .find(|e| e.name.ends_with("PoolWorkSource"))
+        .unwrap()
+        .metrics;
+    assert!(m.compute_time >= wait, "{m:?}");
+    assert!(m.blocked_on_io < wait, "{m:?}");
+}
+
+/// A sort source reading an in-memory result runs its bucket's open, merge
+/// and gather on the blocking pool through its own context's counter, so
+/// the driver counts that work as the sort's compute.
+#[tokio::test]
+async fn a_sort_sources_merge_counts_on_its_context() {
+    let executor = real_executor();
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig {
+            batch_size: 1000,
+            ..ExecConfig::default()
+        },
+        root.child("q", None),
+    );
+    let ctx = |op| {
+        TaskContext::new(
+            Arc::clone(&query),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(op),
+            "Sort",
+        )
+    };
+    let sort = Sort::new(int_schema(), &[SortKey::asc(0)], None).unwrap();
+    let sink_ctx = ctx(0);
+    let global = Sink::global_state(&sort, &sink_ctx).unwrap();
+    let mut local = Sink::local_state(&sort, &sink_ctx, &global).unwrap();
+    for b in 0..20_i64 {
+        let k = (b * 1000..(b + 1) * 1000).map(|i| (i * 2_654_435_761) % 1_000_003);
+        let k: ArrayRef = Arc::new(Int64Array::from_iter_values(k));
+        let batch = Batch::new(RecordBatch::try_new(int_schema(), vec![k]).unwrap());
+        assert!(matches!(
+            sort.sink(batch, &mut local, &global).unwrap(),
+            crate::operator::SinkStatus::NeedMoreInput
+        ));
+    }
+    sort.combine(local, &global).unwrap();
+    sort.finalize(&global, &sink_ctx).await.unwrap();
+
+    let source_ctx = ctx(1).with_dependency(Arc::clone(&global));
+    let source_global = Source::global_state(&sort, &source_ctx).unwrap();
+    let mut local = Source::local_state(&sort, &source_ctx, &source_global).unwrap();
+    let mut rows = 0;
+    while let Some(b) = sort.get_data(&mut local, &source_global).await.unwrap() {
+        rows += b.num_rows();
+    }
+    assert_eq!(rows, 20_000);
+    assert!(
+        source_ctx.blocking_time() > std::time::Duration::ZERO,
+        "the merge ran off the source's counter"
+    );
+    drop((local, source_global, source_ctx, global, sink_ctx));
+    assert_eq!(root.reserved(), 0);
+}

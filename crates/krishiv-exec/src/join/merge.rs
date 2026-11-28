@@ -61,7 +61,7 @@ use crate::error::{Result, internal};
 use crate::executor::Executor;
 use crate::metrics::Metric;
 use crate::operator::{GlobalState, LocalState, Sink, Source};
-use crate::operators::{KeyEncoder, blocking, data_bytes};
+use crate::operators::{KeyEncoder, counted, data_bytes};
 use crate::operators::{Sort, SortKey, global_ref, local_mut};
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::sync::{Event, Mutex, lock};
@@ -100,6 +100,10 @@ pub(crate) fn group_bytes(configured: usize, handle: &ConsumerHandle, drivers: u
 pub(crate) struct MergeEnv {
     pub(crate) query: Arc<QueryContext>,
     pub(crate) executor: Arc<dyn Executor>,
+    /// The blocking-pool time of the context it was made from
+    /// ([`TaskContext::blocking_counter`]), so the merges' and bucket
+    /// readers' work counts as that operator's compute.
+    pub(crate) ran: Arc<AtomicU64>,
     /// The group's memory.
     pub(crate) handle: Arc<ConsumerHandle>,
     /// Each sort's merge: a merge takes all the grant credit of its consumer
@@ -114,6 +118,7 @@ impl MergeEnv {
         Self {
             query: Arc::clone(ctx.query()),
             executor: Arc::clone(ctx.executor()),
+            ran: ctx.blocking_counter(),
             handle: ctx.register_plain_consumer("SortMergeJoin group"),
             left: ctx.register_plain_consumer("SortMergeJoin left merge"),
             right: ctx.register_plain_consumer("SortMergeJoin right merge"),
@@ -442,6 +447,8 @@ pub(crate) struct Merge {
     shared: Arc<Shared>,
     query: Arc<QueryContext>,
     executor: Arc<dyn Executor>,
+    /// [`MergeEnv::ran`].
+    ran: Arc<AtomicU64>,
     handle: Arc<ConsumerHandle>,
     left: Stream,
     right: Stream,
@@ -521,6 +528,7 @@ impl Merge {
             shared,
             query: Arc::clone(&env.query),
             executor: Arc::clone(&env.executor),
+            ran: Arc::clone(&env.ran),
             memory: env.handle.reservation(),
             handle: Arc::clone(&env.handle),
             left: Stream::new(spec.left, spec.left_keys, spec.left_strict),
@@ -859,7 +867,7 @@ impl Merge {
             }
         };
         let query = Arc::clone(&self.query);
-        let writer = blocking(&self.query, &self.executor, move || {
+        let writer = counted(&self.query, &self.executor, &self.ran, move || {
             for c in &chunks {
                 query.check_cancelled()?;
                 let rows = c
@@ -992,14 +1000,14 @@ impl Merge {
                 lent.grow(need).await.map_err(KrishivError::from)?;
                 lent.shrink_to_credit(need);
                 let memory = self.handle.reservation().releasing_to_credit();
-                blocking(&self.query, &self.executor, move || {
+                counted(&self.query, &self.executor, &self.ran, move || {
                     file.reader(memory).map_err(KrishivError::from)
                 })
                 .await?
             }
         };
         self.query.check_cancelled()?;
-        let (reader, next) = blocking(&self.query, &self.executor, move || {
+        let (reader, next) = counted(&self.query, &self.executor, &self.ran, move || {
             let mut reader = reader;
             let next = reader.next().transpose().map_err(KrishivError::from)?;
             Ok((reader, next))

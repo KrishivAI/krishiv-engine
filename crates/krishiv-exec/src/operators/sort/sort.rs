@@ -39,7 +39,7 @@ use super::merge::{
     Bucketing, Merger, ParallelMerge, SortedBatch, SpillRun, data_bytes, interleave_batches,
     merge_part, merge_splitters, owned_rows, parallel_merge, sort_slices, write_run,
 };
-use super::{blocking, finalized};
+use super::{counted, finalized};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
@@ -246,6 +246,7 @@ impl Sort {
             bucket: Some(b),
             query: Arc::clone(&env.query),
             executor: Arc::clone(&env.executor),
+            ran: Arc::clone(&env.ran),
             handle: Arc::clone(handle),
             batch_rows: env.query.config().batch_size.max(1),
         })
@@ -1251,6 +1252,9 @@ struct SortSource {
     bucket: Option<usize>,
     query: Arc<QueryContext>,
     executor: Arc<dyn Executor>,
+    /// The reading driver's blocking-pool time
+    /// ([`TaskContext::blocking_counter`]): a merge is the source's compute.
+    ran: Arc<std::sync::atomic::AtomicU64>,
     handle: Arc<ConsumerHandle>,
     batch_rows: usize,
 }
@@ -1318,6 +1322,7 @@ impl Source for Sort {
             bucket: None,
             query: Arc::clone(ctx.query()),
             executor: Arc::clone(ctx.executor()),
+            ran: ctx.blocking_counter(),
             handle: Arc::clone(ctx.consumer().consumer()),
             batch_rows: ctx.query().config().batch_size.max(1),
         }))
@@ -1420,7 +1425,7 @@ impl Source for Sort {
                         // Each output batch on the blocking pool: a wide
                         // merge over ~1 ms, or reading spilled runs.
                         let rows = l.batch_rows;
-                        let step = blocking(&l.query, &l.executor, move || {
+                        let step = counted(&l.query, &l.executor, &l.ran, move || {
                             let next = merger.next(rows)?;
                             Ok((merger, next))
                         });
@@ -1528,7 +1533,7 @@ impl Sort {
         self.counters
             .fan_in
             .fetch_max(runs.len() as u64, Ordering::Relaxed);
-        let open = blocking(&l.query, &l.executor, move || {
+        let open = counted(&l.query, &l.executor, &l.ran, move || {
             Merger::new(schema, encoder, Vec::new(), &runs, &handle)
         });
         let merger = match lending(&mut budget, &l.handle, 0, open).await {
@@ -1592,7 +1597,7 @@ async fn read_bucket(l: &SortSource, held: &Arc<Held>, b: usize) -> Result<Step>
         if !jobs.is_empty() {
             let gather = jobs
                 .into_iter()
-                .map(|job| blocking(&l.query, &l.executor, move || job.run()));
+                .map(|job| counted(&l.query, &l.executor, &l.ran, move || job.run()));
             match futures::future::try_join_all(gather).await {
                 Ok(batches) => m.gathered(batches),
                 Err(e) => {
@@ -1613,7 +1618,7 @@ async fn read_bucket(l: &SortSource, held: &Arc<Held>, b: usize) -> Result<Step>
         Arc::clone(&held.encoder),
         Arc::clone(&held.handle),
     );
-    let step = blocking(&l.query, &l.executor, move || {
+    let step = counted(&l.query, &l.executor, &l.ran, move || {
         let merger = match (merger, batches) {
             (Some(m), _) => m,
             (None, batches) => {
@@ -1665,7 +1670,7 @@ async fn open_parallel(
     };
     let memory = Arc::new(memory);
     let shared = Arc::clone(&memory);
-    let splitters = blocking(&l.query, &l.executor, move || {
+    let splitters = counted(&l.query, &l.executor, &l.ran, move || {
         merge_splitters(&shared, sort_parts)
     })
     .await?;
@@ -1678,7 +1683,7 @@ async fn open_parallel(
         let query = Arc::clone(&l.query);
         let memory = Arc::clone(&memory);
         let scratch = Arc::clone(&scratch);
-        blocking(&l.query, &l.executor, move || {
+        counted(&l.query, &l.executor, &l.ran, move || {
             let _scratch = scratch;
             query.check_cancelled()?;
             sort_slices(&merge_part(&memory, lo, hi)?)

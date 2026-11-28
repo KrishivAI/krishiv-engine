@@ -111,6 +111,33 @@ where
     .await
 }
 
+/// [`blocking`] whose run time is added to `ran`, a source's
+/// [`TaskContext::blocking_counter`]: the driver then counts the work as
+/// the source's compute time instead of as time blocked on I/O.
+pub(crate) async fn counted<T, F>(
+    query: &Arc<QueryContext>,
+    executor: &Arc<dyn Executor>,
+    ran: &Arc<std::sync::atomic::AtomicU64>,
+    f: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let (clock, ran) = (Arc::clone(executor), Arc::clone(ran));
+    blocking(query, executor, move || {
+        let start = clock.now();
+        let out = f();
+        let ns = clock.now().saturating_duration_since(start).as_nanos();
+        ran.fetch_add(
+            u64::try_from(ns).unwrap_or(u64::MAX),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        out
+    })
+    .await
+}
+
 /// A breaker's source-side global state: its sink's finalized state.
 pub(super) fn finalized<T: Send + Sync + 'static>(
     ctx: &TaskContext,

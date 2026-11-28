@@ -1078,6 +1078,15 @@ impl TaskContext {
         Duration::from_nanos(self.blocking_ns.load(std::sync::atomic::Ordering::Relaxed))
     }
 
+    /// The counter [`run_blocking`](Self::run_blocking) adds to, for a
+    /// source's state: `get_data` has no context, so a source that runs
+    /// work on the blocking pool adds its run time here
+    /// (`operators::sort::counted`) and the driver counts it as the
+    /// source's compute, not as a wait.
+    pub(crate) fn blocking_counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        Arc::clone(&self.blocking_ns)
+    }
+
     /// The operator this context belongs to.
     pub fn op(&self) -> OperatorId {
         self.op
