@@ -147,7 +147,8 @@ def _statistic_column(statistic: str, name: str, dtype: str) -> Column:
     lowered = statistic.lower()
     fraction = _percentile(statistic)
     if fraction is not None:
-        base = column if _is_numeric(dtype) else column.cast("double")
+        # Spark's percentile of a decimal column is the double's own decimal expansion (`1.0`, not `1.00`).
+        base = column if _is_numeric(dtype) and not dtype.startswith("decimal") else column.cast("double")
         if _is_string(dtype):
             base = as_double
         agg = F.percentile_approx(base, fraction, 10000)
