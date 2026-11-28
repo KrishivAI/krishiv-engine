@@ -176,6 +176,20 @@ impl ClientVersion {
             _ => Some(Self::V4_3),
         }
     }
+
+    /// The Spark profile of this version: a session of a client that declares it answers as that
+    /// release does (ADR 0003 update 2026-11-27).
+    #[must_use]
+    pub const fn profile(self) -> krishiv_plan::analyzer::SparkProfile {
+        use krishiv_plan::analyzer::SparkProfile;
+        match self {
+            Self::V3_5 => SparkProfile::V3_5,
+            Self::V4_0 => SparkProfile::V4_0,
+            Self::V4_1 => SparkProfile::V4_1,
+            Self::V4_2 => SparkProfile::V4_2,
+            Self::V4_3 => SparkProfile::V4_3,
+        }
+    }
 }
 
 /// How to decode: the client's declared version and the deepest nesting accepted.

@@ -37,7 +37,9 @@ struct Running {
 
 /// A server whose sessions run as `role`, each with the table `t` (column `a`, three rows).
 async fn start(role: Role) -> Running {
-    let factory = move |_: &Authenticated, _: krishiv_session::Transport| {
+    let factory = move |_: &Authenticated,
+                        _: krishiv_session::Transport,
+                        _: Option<krishiv_plan::analyzer::SparkProfile>| {
         let policy = RolePolicy::new(Some(role), Role::Admin, PolicyVersion(1));
         let s = Session::builder().access_policy(Arc::new(policy)).build()?;
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));

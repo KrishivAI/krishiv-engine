@@ -562,7 +562,7 @@ fn browse_sessions(dir: &Path) -> Box<krishiv_connect_server::manager::SessionFa
         )
         .build()
         .expect("runtime");
-    Box::new(move |caller, _transport| {
+    Box::new(move |caller, _transport, _| {
         Session::builder()
             .runtime(Arc::clone(&rt))
             .principal(caller.principal.clone())

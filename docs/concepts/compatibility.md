@@ -37,7 +37,7 @@ Status per surface. Anything not listed here is unknown and not supported.
 | DDL and DML (CREATE/INSERT/DELETE on file-backed tables and views) | partial | Statements the golden suite covers are counted in its pass rates. |
 | `bucketBy` on writes | not yet | Fails with a clear unsupported-feature error. |
 | DataFrameWriterV2 (`writeTo`) | partial | `create` and `append` work in a Python session. `createOrReplace` and `replace` fail as REPLACE TABLE AS SELECT does; `overwrite(condition)` and `overwritePartitions` always fail with KRISHIV_UNSUPPORTED_FEATURE; `partitionedBy` and `clusterBy` fail when the write runs. Spark Connect clients cannot use `writeTo` yet. |
-| Spark version | partial | Krishiv 0.2 runs as Spark 4.2 only; Spark 3.5, 4.0 and 4.1 behaviour is not selectable yet. |
+| Spark version | partial | `krishiv server` gives each Spark Connect session the behaviour of the Spark release its client declares (`--spark-profile auto`, the default: a PySpark 3.5 client gets Spark 3.5 behaviour, ANSI mode off), or one release for every session (`--spark-profile 3.5` to `4.3`, also `krishiv.connect.sparkProfile`). Embedded sessions choose one with `SessionBuilder::profile`. Differences between releases are covered where the goldens show them, the ANSI default first. |
 
 ## Spark Connect
 

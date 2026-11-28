@@ -4,7 +4,7 @@
 use std::sync::{Arc, PoisonError, RwLock};
 
 use krishiv_common::config::{
-    Config, ConfigEntry, ConfigValue, IO_TEXT_INFER_TIME, IO_TEXT_TIME_NANOS,
+    ANSI_ENABLED, Config, ConfigEntry, ConfigValue, IO_TEXT_INFER_TIME, IO_TEXT_TIME_NANOS,
     PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope, ValueType, lookup,
 };
 use krishiv_common::error::{
@@ -44,18 +44,31 @@ pub(crate) struct ConfStore {
     profile: SparkProfile,
 }
 
+/// The entries whose Spark default differs by release ([`profile_default`]).
+static PROFILE_KEYS: [&ConfigEntry; 4] = [
+    &ANSI_ENABLED,
+    &PYTHON_UDTF_ARROW_ENABLED,
+    &IO_TEXT_TIME_NANOS,
+    &IO_TEXT_INFER_TIME,
+];
+
 /// The default of `entry` under `profile` where Spark's differs by release from the registry's (Spark 4.2's):
-/// `spark.sql.execution.pythonUDTF.arrow.enabled` is `false` before 4.2 (`SQLConf.scala` at v3.5.6, v4.0.0 and
-/// v4.1.0; `true` at v4.2.0).
+/// `spark.sql.ansi.enabled` is `false` before 4.0 (`SQLConf.scala`: `SPARK_ANSI_SQL_MODE == "true"` at v3.5.6 and
+/// v3.5.10, `!= "false"` at v4.0.0; Krishiv does not read that variable), and
+/// `spark.sql.execution.pythonUDTF.arrow.enabled` is `false` before 4.2 (v3.5.6, v4.0.0 and v4.1.0; `true` at
+/// v4.2.0); the text-file `TIME` switches are `false` before 4.3.
 fn profile_default(entry: &ConfigEntry, profile: SparkProfile) -> Option<ConfigValue> {
-    let before_4_2 = profile < SparkProfile::V4_2;
     // Spark 4.2 reads a `TIME` of a CSV or JSON file in the default grammar as microseconds; 4.3 keeps
     // nanoseconds (a `timeFormat` pattern keeps every digit in both). Only 4.3's text inference gives `TIME`.
-    let before_4_3 = profile < SparkProfile::V4_3;
-    ((entry.key == PYTHON_UDTF_ARROW_ENABLED.key && before_4_2)
-        || ((entry.key == IO_TEXT_TIME_NANOS.key || entry.key == IO_TEXT_INFER_TIME.key)
-            && before_4_3))
-        .then_some(ConfigValue::Bool(false))
+    let off = if entry.key == ANSI_ENABLED.key {
+        profile < SparkProfile::V4_0
+    } else if entry.key == PYTHON_UDTF_ARROW_ENABLED.key {
+        profile < SparkProfile::V4_2
+    } else {
+        (entry.key == IO_TEXT_TIME_NANOS.key || entry.key == IO_TEXT_INFER_TIME.key)
+            && profile < SparkProfile::V4_3
+    };
+    off.then_some(ConfigValue::Bool(false))
 }
 
 /// Fails when `key` is one of the switches the engine refuses and `value` sets it to the refused value.
@@ -177,15 +190,11 @@ impl ConfStore {
     pub(crate) fn query_snapshot(&self) -> (Arc<Config>, u64) {
         let (config, version) = self.versioned_snapshot();
         let zone_unset = config.get(&SESSION_TIME_ZONE).is_none();
-        let profile_keys: Vec<(&ConfigEntry, ConfigValue)> = [
-            &PYTHON_UDTF_ARROW_ENABLED,
-            &IO_TEXT_TIME_NANOS,
-            &IO_TEXT_INFER_TIME,
-        ]
-        .into_iter()
-        .filter(|entry| !config.is_set(entry))
-        .filter_map(|entry| Some((entry, profile_default(entry, self.profile)?)))
-        .collect();
+        let profile_keys: Vec<(&ConfigEntry, ConfigValue)> = PROFILE_KEYS
+            .into_iter()
+            .filter(|entry| !config.is_set(entry))
+            .filter_map(|entry| Some((entry, profile_default(entry, self.profile)?)))
+            .collect();
         if !zone_unset && profile_keys.is_empty() {
             return (config, version);
         }
@@ -210,6 +219,15 @@ impl ConfStore {
 
     pub(crate) fn snapshot(&self) -> Arc<Config> {
         self.versioned_snapshot().0
+    }
+
+    /// The configuration as a query sees it ([`Self::query_snapshot`] without its version): the
+    /// reader for any key whose unset value depends on the session's Spark profile
+    /// (`spark.sql.ansi.enabled` and the parser options it gates), so a parse outside a query
+    /// agrees with the query and with `conf.get`. `${..}` substitution reads [`Self::snapshot`]:
+    /// Spark substitutes only keys that are set, never a default.
+    pub(crate) fn effective(&self) -> Arc<Config> {
+        self.query_snapshot().0
     }
 
     /// Whether `config` gives a server-scoped store key (`krishiv_io::is_server_scoped_option`:
@@ -583,7 +601,7 @@ mod tests {
     use krishiv_common::config::Config;
 
     use super::{ConfStore, get, local_zone_from};
-    use krishiv_common::config::PYTHON_UDTF_ARROW_ENABLED;
+    use krishiv_common::config::{ANSI_ENABLED, PYTHON_UDTF_ARROW_ENABLED};
     use krishiv_plan::analyzer::SparkProfile;
 
     /// What a query's configuration holds for a key whose Spark default differs by release is the profile's
@@ -605,6 +623,39 @@ mod tests {
             assert_eq!(
                 config.get(key).map(ToString::to_string).as_deref(),
                 Some("true")
+            );
+        }
+    }
+
+    /// `spark.sql.ansi.enabled` defaults to `false` on the 3.5 profile and `true` from 4.0 (`SQLConf.scala` at
+    /// v3.5.10 and v4.0.0, issue S4M-3); a set value wins on either.
+    #[test]
+    fn the_ansi_default_follows_the_profile() {
+        let key = &ANSI_ENABLED;
+        for (profile, want) in [
+            (SparkProfile::V3_5, "false"),
+            (SparkProfile::V4_0, "true"),
+            (SparkProfile::V4_3, "true"),
+        ] {
+            let store = ConfStore::new(Config::default()).with_profile(profile);
+            let (config, _) = store.query_snapshot();
+            assert_eq!(
+                config.get(key).map(ToString::to_string).as_deref(),
+                Some(want),
+                "{profile:?}"
+            );
+            assert_eq!(store.value("spark.sql.ansi.enabled").as_deref(), Some(want));
+            assert!(store.explicit_entries().iter().all(|(k, _)| k != key.key));
+            let flipped = if want == "true" { "false" } else { "true" };
+            store.update(|c| c.set(key.key, flipped).map(drop)).unwrap();
+            let (config, _) = store.query_snapshot();
+            assert_eq!(
+                config.get(key).map(ToString::to_string).as_deref(),
+                Some(flipped)
+            );
+            assert_eq!(
+                store.value("spark.sql.ansi.enabled").as_deref(),
+                Some(flipped)
             );
         }
     }
