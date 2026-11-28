@@ -77,7 +77,7 @@ The catalog <catalog> needs a delegated user token: <reason>. The server never u
 SQLSTATE `58030`.
 
 ~~~text
-The catalog <catalog> failed while loading <relationName>.
+The catalog <catalog> failed while loading <relationName>: <reason>.
 ~~~
 
 ## KRISHIV_CATALOG_LIMIT_EXCEEDED
@@ -449,6 +449,14 @@ SQLSTATE `22018`.
 
 ~~~text
 The JSON string <json> is malformed. Provide valid JSON.
+~~~
+
+## KRISHIV_MCP_QUEUE_FULL
+
+SQLSTATE `53400`.
+
+~~~text
+The MCP server already has <maxQueued> calls waiting behind the running query, so this call is refused. Retry when one of them has finished.
 ~~~
 
 ## KRISHIV_MCP_STATEMENT_NOT_ALLOWED

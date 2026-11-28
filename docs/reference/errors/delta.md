@@ -174,12 +174,28 @@ SQLSTATE `22005`.
 Failed to merge fields '<currentField>' and '<updateField>'
 ~~~
 
+## DELTA_ILLEGAL_OPTION
+
+SQLSTATE `42616`.
+
+~~~text
+Invalid value '<input>' for option '<name>', <explain>
+~~~
+
 ## DELTA_INSERT_COLUMN_ARITY_MISMATCH
 
 SQLSTATE `42802`.
 
 ~~~text
 Cannot write to '<tableName>', <columnName>; target table has <numColumns> column(s) but the inserted data has <insertColumns> column(s)
+~~~
+
+## DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS
+
+SQLSTATE `42616`.
+
+~~~text
+Invalid options for idempotent Dataframe writes: <reason>
 ~~~
 
 ## DELTA_INVALID_ISOLATION_LEVEL
