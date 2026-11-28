@@ -426,7 +426,13 @@ impl RowLayout {
                 // read, so a string column is checked as UTF-8 once over its
                 // bytes, not value by value into a list of `&str`
                 // (ClickBench q14: 7.7% of samples in `from_utf8`).
-                let mut values = ByteValues::with_capacity(rows.len());
+                // The value bytes, summed first so the buffer is sized once.
+                let bytes: usize = rows
+                    .iter()
+                    .filter(|&&(r, _)| valid(r))
+                    .map(|&(r, _)| view_len(r, c.offset))
+                    .sum();
+                let mut values = ByteValues::with_capacity(rows.len(), bytes);
                 for &(r, heap) in rows {
                     if !valid(r) {
                         values.push_null();
@@ -1049,7 +1055,9 @@ fn gather<const N: usize>(out: &mut [u8], rows: &[&[u8]], at: usize) {
 /// array. [`finish`](Self::finish) validates a string column once over all
 /// its bytes (arrow's `try_new`: one `from_utf8`, then every offset on a
 /// character boundary), and a view column takes the buffer as its one data
-/// block without copying or checking it again.
+/// block without copying or checking it again. Inline view values (up to
+/// 12 bytes) then sit both in the views and in that block, and past 4 GiB
+/// of values `StringViewArray::from(&LargeStringArray)` copies into blocks.
 struct ByteValues {
     offsets: Vec<i64>,
     bytes: Vec<u8>,
@@ -1057,12 +1065,12 @@ struct ByteValues {
 }
 
 impl ByteValues {
-    fn with_capacity(rows: usize) -> Self {
+    fn with_capacity(rows: usize, bytes: usize) -> Self {
         let mut offsets = Vec::with_capacity(rows + 1);
         offsets.push(0);
         Self {
             offsets,
-            bytes: Vec::new(),
+            bytes: Vec::with_capacity(bytes),
             nulls: NullBufferBuilder::new(rows),
         }
     }
@@ -1092,7 +1100,8 @@ impl ByteValues {
         use krishiv_kernels::unsafe_utf8::{StringArrayError, string_array};
         let nulls = self.nulls.finish();
         let values = Buffer::from_vec(self.bytes);
-        let not_utf8 = |e: StringArrayError| internal(format!("a row string is not UTF-8: {e:?}"));
+        let not_utf8 =
+            |e: StringArrayError| internal(format!("row strings do not form an array: {e}"));
         let not_bytes = |e: ArrowError| internal(format!("row bytes do not form an array: {e}"));
         let large = OffsetBuffer::new(ScalarBuffer::from(self.offsets));
         let small = |large: &OffsetBuffer<i64>| {

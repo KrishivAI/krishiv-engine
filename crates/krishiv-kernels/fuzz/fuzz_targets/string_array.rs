@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `unsafe_utf8::string_array` (the one-pass check before
 //! `new_unchecked`) against arrow's checked `try_new` over arbitrary bytes,
-//! offsets and nulls: both accept the same inputs and build equal arrays.
+//! offsets and nulls. One-sided: whatever ours accepts, arrow accepts and
+//! builds into an equal array. Ours may refuse what arrow-array 60.1 / 60.2
+//! accepts only over bytes outside the offsets (ours checks the whole
+//! buffer and every offset against it, as 60.0 did).
 #![no_main]
 
 use arrow_array::LargeStringArray;
 use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
-use krishiv_kernels::unsafe_utf8::string_array;
+use krishiv_kernels::unsafe_utf8::{StringArrayError, string_array};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -31,13 +34,17 @@ fuzz_target!(|data: &[u8]| {
         offsets.push(offsets[0]);
     }
     let count = offsets.len() - 1;
+    // Bit 2 of the mask gives the null buffer one bit too many, so a wrong
+    // length is fuzzed too.
+    let null_len = count + usize::from(mask[0] & 4 == 4);
     let nulls = (mask[0] & 1 == 1).then(|| {
         NullBuffer::from(
-            (0..count)
+            (0..null_len)
                 .map(|i| (mask[0] >> (i % 8)) & 2 == 0)
                 .collect::<Vec<_>>(),
         )
     });
+    let (first, last) = (offsets[0], offsets[offsets.len() - 1]);
     let o = OffsetBuffer::new(ScalarBuffer::from(offsets));
     let v = Buffer::from_vec(values.to_vec());
     let ours = string_array(o.clone(), v.clone(), nulls.clone());
@@ -45,6 +52,12 @@ fuzz_target!(|data: &[u8]| {
     match (ours, arrow) {
         (Ok(a), Ok(b)) => assert_eq!(a, b),
         (Err(_), Err(_)) => {}
+        // Stricter than arrow-array 60.1 / 60.2 only over the bytes outside
+        // the offsets: the whole buffer is not UTF-8, or every value is empty
+        // at an offset inside a character (60.2 checks the empty slice
+        // `values[first..last]`; with `first < last` a split is refused by both).
+        (Err(StringArrayError::NotUtf8), Ok(_)) if std::str::from_utf8(values).is_err() => {}
+        (Err(StringArrayError::SplitCharacter), Ok(_)) if first == last => {}
         (a, b) => panic!("disagree: ours {a:?}, arrow {b:?}"),
     }
 });
