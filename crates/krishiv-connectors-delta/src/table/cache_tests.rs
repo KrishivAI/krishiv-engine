@@ -380,6 +380,29 @@ fn the_delta_log_is_found_or_not() {
     assert!(!empty.block_on(has_delta_log(&empty.engine)).unwrap());
 }
 
+/// R1-Q-1: delta-spark's path check: a root that is not there is `PATH_NOT_FOUND`, one with no log is
+/// `DELTA_TABLE_NOT_FOUND` named `` delta.`<path>` ``, never `INTERNAL_ERROR`.
+#[test]
+fn a_missing_or_logless_root_is_a_path_or_table_error() {
+    let empty = Env::empty();
+    let Err(e) = empty.open() else {
+        panic!("no commit in the log: the open succeeded");
+    };
+    assert_eq!(e.error_class().name(), "DELTA_TABLE_NOT_FOUND", "{e}");
+    assert!(e.to_string().contains("delta.`file:"), "{e}");
+    std::fs::write(empty.dir.join("part-0.parquet"), b"x").unwrap();
+    let Err(e) = empty.open() else {
+        panic!("a Parquet directory: the open succeeded");
+    };
+    assert_eq!(e.error_class().name(), "DELTA_TABLE_NOT_FOUND", "{e}");
+    let missing = Env::at(empty.dir.join("missing"));
+    let Err(e) = missing.open() else {
+        panic!("no directory: the open succeeded");
+    };
+    assert_eq!(e.error_class().name(), "PATH_NOT_FOUND", "{e}");
+    assert!(e.to_string().contains("file:"), "{e}");
+}
+
 #[test]
 fn a_root_holds_files_or_not() {
     let empty = Env::empty();

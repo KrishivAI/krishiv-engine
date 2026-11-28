@@ -40,7 +40,7 @@ use delta_kernel::schema::{DataType, StructField};
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::{KernelError, Snapshot, SnapshotRef};
 use krishiv_common::config::Config;
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{DeltaTableNotFound, InternalError, KrishivError, PathNotFound};
 use krishiv_exec::ScanPushdown;
 use krishiv_exec::planner::TableProvider;
 use krishiv_io::{FieldMapping, ScanOptions};
@@ -102,6 +102,47 @@ fn percent_decoded(text: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// What a snapshot that could not be built says about a root with no table (R1-Q-1), as delta-spark's
+/// `DeltaTableV2` path check does: a root that does not exist is `PATH_NOT_FOUND`; one with no
+/// versioned `_delta_log/` file is `DELTA_TABLE_NOT_FOUND` (a path table is named `` delta.`<path>` ``).
+/// `None`: the root holds a log, so the kernel's own error stands (or the listing itself failed).
+fn missing_table_error(
+    e: &DeltaEngine,
+    root: &str,
+    path_based: bool,
+    label: &str,
+) -> Option<KrishivError> {
+    use delta_kernel::StorageHandler as _;
+    let url = url::Url::parse(root).ok()?;
+    if url.scheme() == "file" && url.to_file_path().is_ok_and(|p| !p.exists()) {
+        return Some(
+            PathNotFound {
+                path: hadoop_path(&url),
+            }
+            .into(),
+        );
+    }
+    let log = url.join("_delta_log/").ok()?;
+    let has_log = e.storage().list_from(&log).ok()?.any(|m| {
+        m.ok().is_some_and(|m| {
+            let name = m.location.path().rsplit('/').next().unwrap_or("");
+            let v = name.split('.').next().unwrap_or("");
+            !v.is_empty()
+                && v.bytes().all(|b| b.is_ascii_digit())
+                && (name.ends_with(".json") || name.ends_with(".parquet"))
+        })
+    });
+    if has_log {
+        return None;
+    }
+    let table_name = if path_based {
+        format!("delta.`{label}`")
+    } else {
+        label.to_owned()
+    };
+    Some(DeltaTableNotFound { table_name }.into())
 }
 
 /// Whether `engine`'s root holds a Delta table: a commit or checkpoint file under `_delta_log/`.
@@ -277,6 +318,7 @@ impl DeltaTable {
             name,
             cache,
         } = options;
+        let path_based = name.is_none();
         let name = name.unwrap_or_else(|| hadoop_path(engine.table_root()));
         let root = engine.table_root().as_str().to_owned();
         let cache = cache.filter(|_| version.is_none());
@@ -306,9 +348,13 @@ impl DeltaTable {
                 if let Some(v) = version {
                     builder = builder.at_version(v);
                 }
-                let snapshot = builder
-                    .build(e)
-                    .map_err(|err| snapshot_error(&err, &label))?;
+                let snapshot = match builder.build(e) {
+                    Ok(snapshot) => snapshot,
+                    Err(err) => {
+                        return Err(missing_table_error(e, &root, path_based, &label)
+                            .unwrap_or_else(|| snapshot_error(&err, &label)));
+                    }
+                };
                 // The allow-list before the file listing: a refused table reads no more.
                 check_read(&label, &ReadProtocol::of(&snapshot))?;
                 let units: Arc<[ScanUnit]> = list_units(e, &snapshot, None)
