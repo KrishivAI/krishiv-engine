@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `unix_seconds`, `unix_millis` and `unix_micros` of a `TIMESTAMP_NTZ`: refused before Spark 4.3, its wall
 //! clock read in UTC from 4.3 whatever the session zone. Expected values and messages from Spark 4.2.0, 4.2.1
-//! and 4.3.0 runs (`spark-sql -f`, session zones UTC and America/Los_Angeles; 3.5.7 refuses it too).
+//! and 4.3.0 runs (`spark-sql -f` and PySpark, session zones UTC and America/Los_Angeles; 3.5.7 refuses it too).
 #![expect(clippy::unwrap_used, clippy::expect_used, reason = "a test")]
 
 use krishiv_plan::analyzer::SparkProfile;
@@ -52,6 +52,30 @@ fn spark_43_reads_a_timestamp_ntz_as_its_wall_clock_in_utc() {
             .unwrap(),
             "bigint  -1",
             "{zone}: NULL stays NULL; seconds floor"
+        );
+        assert_eq!(
+            run(
+                &s,
+                "SELECT typeof(unix_micros(NULL)), unix_micros(NULL), unix_seconds(NULL)"
+            )
+            .unwrap(),
+            "bigint  ",
+            "{zone}: an untyped NULL reads as a TIMESTAMP"
+        );
+        run(
+            &s,
+            "CREATE OR REPLACE TEMPORARY VIEW v AS SELECT * FROM VALUES \
+             (TIMESTAMP_NTZ'2020-01-02 03:04:05.123456'), (NULL) AS t(c)",
+        )
+        .unwrap();
+        assert_eq!(
+            run(
+                &s,
+                "SELECT unix_micros(c), unix_millis(c), unix_seconds(c) FROM v"
+            )
+            .unwrap(),
+            "1577934245123456 1577934245123 1577934245 |   ",
+            "{zone}: a TIMESTAMP_NTZ column"
         );
     }
 }
