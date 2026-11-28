@@ -14,8 +14,10 @@ from pyspark.sql import SparkSession  # pip install pyspark-client
 
 with krishiv.start_local() as server:
     spark = SparkSession.builder.remote(server.url).create()
-    spark.range(3).show()
-    spark.stop()
+    try:
+        spark.range(3).show()
+    finally:
+        spark.stop()  # before the server stops, also when a statement fails
 ```
 
 `server.url` is `sc://localhost:<port>/;token=<token>`. The client sends the token with every request (`authorization: Bearer <token>`), and the server refuses a connection that does not carry it. The token is made for each `start_local()` call, so another local process that finds the port cannot use it.
@@ -25,6 +27,8 @@ The host name is `localhost` on purpose: `pyspark-client` sends a token over a p
 `spark.sql(...)` through the client works, and so does the DataFrame API (`range`, `select`, `join`, `groupBy`, `agg`).
 
 ## Stop it
+
+Stop the client before the server. If an error leaves the `with` block while the client is still open, the server stops, and then PySpark's exit hook calls the stopped server and retries with backoff, so the process hangs for a long time after the traceback. Keep `spark.stop()` in a `finally` as above.
 
 `server.stop()` closes the listener and waits for the server's thread, so the port is free when it returns. Leaving the `with` block does the same, and so does the end of the interpreter if you forget. Stopping a stopped server does nothing.
 
