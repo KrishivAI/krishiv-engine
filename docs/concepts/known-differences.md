@@ -432,6 +432,18 @@ unless the server was started with one. Krishiv accepts the setting per session 
 at server start) because a client with no `SparkContext` has no other route; code that relies on Spark's
 refusal is the only code that sees a difference.
 
+## `${env:NAME}` and `${system:NAME}` in a server's SQL stay as written
+
+Spark replaces `${env:NAME}` and `${system:NAME}` in SQL text with the driver's environment variable and Java system
+property before parsing (`VariableSubstitution`, `spark.sql.variable.substitute`). In a `krishiv server` session (Spark
+Connect, Flight SQL, the console's SQL editor) Krishiv leaves both as written, as it leaves a name it does not know:
+otherwise any signed-in client could read every secret the server process holds (`SELECT '${env:AWS_SECRET_ACCESS_KEY}'`,
+or the variables that `env:` references in `krishiv.auth.*` and catalog tokens name). `${name}` of a configuration value
+is still substituted. An operator who wants Spark's behaviour back sets `krishiv.server.sql.substituteEnvironment=true` at
+server start; no `SET` or Connect `Config` call can change it. Embedded sessions (`krishiv sql`, the Python and Rust
+APIs) read the environment as Spark does; there, `${system:NAME}` reads the environment variable `NAME` too, since there
+is no JVM.
+
 ## A second catalog, `system`, next to `spark_catalog`
 
 `SHOW CATALOGS` lists `spark_catalog` and `system`. `system` is Krishiv's own catalog of introspection tables

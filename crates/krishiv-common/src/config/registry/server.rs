@@ -335,6 +335,23 @@ pub static SERVER_SHUTDOWN_TIMEOUT: ConfigEntry = startup(
     None,
 );
 
+/// Whether SQL text in a served session reads the server's environment through `${env:NAME}` and
+/// `${system:NAME}`.
+pub static SERVER_SQL_SUBSTITUTE_ENVIRONMENT: ConfigEntry = startup(
+    "krishiv.server.sql.substituteEnvironment",
+    ValueType::Bool,
+    ConfigValue::Bool(false),
+    "Whether `${env:NAME}` and `${system:NAME}` in the SQL text of a `krishiv server` session (Spark \
+     Connect, Flight SQL, the console's editor) are replaced from the server process's environment, \
+     as Spark's variable substitution does. Off by default, a recorded difference from Spark: any \
+     signed-in client could otherwise read every secret the process holds (`AWS_SECRET_ACCESS_KEY`, \
+     the `env:` references of `krishiv.auth.*` and catalog tokens), so a served session leaves such \
+     a reference as written, like an unknown name. `${name}` of a configuration value is substituted \
+     as before. Embedded sessions (`krishiv sql`, the Python and Rust APIs) always read the \
+     environment. A startup setting: `SET` cannot change it.",
+    None,
+);
+
 /// How often the server re-runs its readiness checks.
 pub static SERVER_READINESS_INTERVAL: ConfigEntry = startup(
     "krishiv.server.readiness.interval",

@@ -4,7 +4,9 @@
 //!
 //! `${name}` is the configuration value of `name`; `${hivevar:name}`, `${hiveconf:name}`, `${spark:name}`
 //! and `${sparkconf:name}` look the same name up (also stored with their prefix, as `SET hivevar:name = v`
-//! stores it); `${env:NAME}` and `${system:NAME}` read the process environment. Values are substituted
+//! stores it); `${env:NAME}` and `${system:NAME}` read the process environment, except in a served session
+//! (`krishiv server`), where they stay as written unless `krishiv.server.sql.substituteEnvironment` is
+//! on (a recorded difference from Spark: a client must not read the server's secrets). Values are substituted
 //! again (to a depth of 10); an unknown name stays as written. Only the form `${` + characters other than
 //! `}`, `$` and space + `}` is a reference.
 
@@ -25,18 +27,24 @@ impl crate::Session {
     }
 }
 
-/// `text` with every known `${name}` replaced by its value from `lookup` (configuration by key).
-pub(crate) fn substitute<'a>(
-    text: &'a str,
-    lookup: &dyn Fn(&str) -> Option<String>,
-) -> Cow<'a, str> {
+/// Where a `${name}` reference's value comes from.
+pub(crate) struct Sources<'l> {
+    /// The configuration by key.
+    pub(crate) lookup: &'l dyn Fn(&str) -> Option<String>,
+    /// Whether `${env:..}` and `${system:..}` read the process environment; when not, they stay
+    /// as written, like an unknown name.
+    pub(crate) environment: bool,
+}
+
+/// `text` with every known `${name}` replaced by its value from `sources`.
+pub(crate) fn substitute<'a>(text: &'a str, sources: &Sources<'_>) -> Cow<'a, str> {
     if !text.contains("${") {
         return Cow::Borrowed(text);
     }
-    Cow::Owned(go(text, lookup, 0))
+    Cow::Owned(go(text, sources, 0))
 }
 
-fn go(text: &str, lookup: &dyn Fn(&str) -> Option<String>, depth: usize) -> String {
+fn go(text: &str, lookup: &Sources<'_>, depth: usize) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find("${") {
@@ -62,9 +70,11 @@ fn go(text: &str, lookup: &dyn Fn(&str) -> Option<String>, depth: usize) -> Stri
     out
 }
 
-fn value(name: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+fn value(name: &str, sources: &Sources<'_>) -> Option<String> {
+    let lookup = sources.lookup;
     if let Some((prefix, key)) = name.split_once(':') {
         return match prefix {
+            "env" | "system" if !sources.environment => None,
             "env" | "system" => std::env::var(key).ok(),
             "hivevar" | "hiveconf" | "spark" | "sparkconf" => lookup(key).or_else(|| lookup(name)),
             _ => lookup(name),
@@ -86,7 +96,14 @@ mod tests {
             "loop" => Some("${loop}".to_owned()),
             _ => None,
         };
-        substitute(text, &lookup).into_owned()
+        substitute(
+            text,
+            &Sources {
+                lookup: &lookup,
+                environment: true,
+            },
+        )
+        .into_owned()
     }
 
     #[test]
@@ -98,6 +115,23 @@ mod tests {
         );
         assert_eq!(run("no references"), "no references");
         assert_eq!(run("${hiveconf:a}${spark:a}"), "11");
+    }
+
+    #[test]
+    fn without_the_environment_env_and_system_stay_as_written() {
+        // `PATH` is set in every test environment; the configuration still substitutes.
+        let lookup = |k: &str| (k == "a").then(|| "${env:PATH}".to_owned());
+        let sources = |environment| Sources {
+            lookup: &lookup,
+            environment,
+        };
+        let text = "${env:PATH} ${system:PATH} ${a}";
+        assert_eq!(
+            substitute(text, &sources(false)),
+            "${env:PATH} ${system:PATH} ${env:PATH}"
+        );
+        let read = substitute(text, &sources(true));
+        assert!(!read.contains("${env:PATH}"), "{read}");
     }
 
     #[test]

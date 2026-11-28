@@ -537,7 +537,21 @@ impl Session {
         if crate::conf::get(&config, "spark.sql.variable.substitute")
             .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
         {
-            crate::variable_substitution::substitute(query, &|k| crate::conf::get(&config, k))
+            // A served session never reads the server's environment unless the operator turned it on
+            // at startup (a cluster key: no `SET` or session builder changes it).
+            let environment = self.runtime().catalogs().mode()
+                != crate::catalog_decl::DeclMode::Server
+                || config
+                    .get(&krishiv_common::config::SERVER_SQL_SUBSTITUTE_ENVIRONMENT)
+                    .and_then(krishiv_common::config::ConfigValue::as_bool)
+                    .unwrap_or(false);
+            crate::variable_substitution::substitute(
+                query,
+                &crate::variable_substitution::Sources {
+                    lookup: &|k| crate::conf::get(&config, k),
+                    environment,
+                },
+            )
         } else {
             std::borrow::Cow::Borrowed(query)
         }
