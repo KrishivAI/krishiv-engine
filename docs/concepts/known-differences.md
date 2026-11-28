@@ -955,3 +955,11 @@ a left row left with none) and the `NEAREST_BY_JOIN.*` errors. `EXPLAIN` shows a
 top-k per left row. The `CROSS_JOIN_NOT_ENABLED` check runs when the statement is parsed, where Spark's runs in the
 optimizer, so `CREATE VIEW v AS SELECT ... NEAREST BY ...` under `spark.sql.crossJoin.enabled=false` fails here and
 succeeds in Spark.
+
+## A killed write leaves finished files that a Spark reader counts
+Krishiv writes each data file under its final name and records the write in `_krishiv_log`; it never renames. A
+write killed (`kill -9`) after some files were finished leaves those files in the directory without a `_SUCCESS`
+marker. Krishiv ignores them (its log does not list them) and deletes them in the next write to the directory. A
+Spark reader that reads the directory before that next write counts them, so a count can be larger there than
+Krishiv's. A file that was still being uploaded is staged under a name starting with `.` and Spark skips it. Fix the
+state by writing the directory again, or check for `_SUCCESS` before reading a directory a writer may have died on.
