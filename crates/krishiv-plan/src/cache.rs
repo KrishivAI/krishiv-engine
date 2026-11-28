@@ -968,6 +968,13 @@ impl Encoder {
                             self.text(n);
                         }
                     }
+                    crate::ColumnNamesOp::Deduplicate { subset } => {
+                        self.num(6);
+                        self.num(subset.len() as u64);
+                        for n in subset {
+                            self.text(n);
+                        }
+                    }
                     crate::ColumnNamesOp::DropNa {
                         subset,
                         min_non_nulls,
