@@ -7,14 +7,15 @@
 # Starts IMAGE with only KRISHIV_AUTH_TOKEN set (the entrypoint binds 0.0.0.0 with a generated
 # self-signed certificate), waits for the container to
 # report healthy, reads the console page, runs one query through PySpark over TLS with the token, writes and reads a Delta table, and checks that the
-# image is set to run as a non-root user and that the admin port answers `/readyz`.
+# image is set to run as a non-root user and that the admin port answers `/readyz`. Then it exercises
+# the entrypoint's other branches (a token from a mounted file, a generated token, the refusals).
 set -euo pipefail
 image=$1
 work=$(mktemp -d)
 name=krishiv-smoke-$$
 cleanup() {
   docker logs "$name" 2>&1 | tail -n 40 || true
-  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker rm -f "$name" "$name-file" "$name-gen" "$name-refuse" >/dev/null 2>&1 || true
   # The container's user (10001) owns what it wrote under data/: clear it as root in the image.
   docker run --rm --user 0 --entrypoint sh -v "$work/data:/d" "$image" -c 'rm -rf /d/* /d/.[!.]*' >/dev/null 2>&1 || true
   rm -rf "$work" || true
@@ -68,3 +69,48 @@ assert got == [(1, "east"), (2, "west")], got
 print("delta ->", got)
 spark.stop()
 PY
+
+# Entrypoint branches. Each starts a second container on other host ports (the first still runs).
+echo "== entrypoint: token from a mounted secret file (mode 0444, not owned by 10001) =="
+printf '%s' "file-$(openssl rand -hex 16)" >"$work/secret"
+chmod 444 "$work/secret"
+docker run -d --name "$name-file" -p 8081:8080 \
+  -v "$work/secret:/run/secrets/krishiv_token:ro" "$image" >/dev/null
+for _ in $(seq 1 60); do
+  curl -fsk https://127.0.0.1:8081/readyz >/dev/null 2>&1 && break
+  [ "$(docker inspect -f '{{.State.Running}}' "$name-file")" = true ] || { docker logs "$name-file"; echo "::error::file-token container exited"; exit 1; }
+  sleep 2
+done
+curl -fsk https://127.0.0.1:8081/readyz >/dev/null || { echo "::error::file-token container never became ready"; exit 1; }
+# /readyz needs no token: check the entrypoint used the file's token, not a generated one.
+[ "$(docker exec "$name-file" cat /var/lib/krishiv/tls/token.secret)" = "$(cat "$work/secret")" ] \
+  || { echo "::error::the file's token was not used"; exit 1; }
+file_logs=$(docker logs "$name-file" 2>&1)
+if grep -q 'generated a token in' <<<"$file_logs"; then echo "::error::a token was generated although a file was mounted"; exit 1; fi
+docker rm -f "$name-file" >/dev/null
+
+echo "== entrypoint: no token given generates one and prints it =="
+docker run -d --name "$name-gen" "$image" >/dev/null
+for _ in $(seq 1 30); do
+  gen_logs=$(docker logs "$name-gen" 2>&1)
+  grep -q 'generated a token in' <<<"$gen_logs" && break
+  sleep 1
+done
+gen_logs=$(docker logs "$name-gen" 2>&1)
+grep -q 'generated a token in' <<<"$gen_logs" || { echo "::error::no generated-token notice"; exit 1; }
+docker rm -f "$name-gen" >/dev/null
+
+refuses() { # refuses MESSAGE docker-run-args...: the container must exit non-zero with MESSAGE
+  local msg=$1; shift
+  local out
+  # Named and under `timeout`: a container that stops refusing starts the server, which must fail the check, not hang.
+  local rc=0
+  out=$(timeout 60 docker run --name "$name-refuse" "$@" "$image" 2>&1) || rc=$?
+  docker rm -f "$name-refuse" >/dev/null 2>&1 || true
+  if [ "$rc" = 0 ] || [ "$rc" = 124 ]; then echo "$out"; echo "::error::expected a refusal: $msg"; exit 1; fi
+  grep -q "$msg" <<<"$out" || { echo "$out"; echo "::error::refusal lacks '$msg'"; exit 1; }
+}
+echo "== entrypoint: refusals =="
+: >"$work/empty"
+refuses "is not readable by uid" -v "$work/empty:/run/secrets/krishiv_token:ro"
+refuses "are set but" -e KRISHIV_AUTH_TOKEN=x -e KRISHIV_TLS_CERT=/nonexistent/cert.pem -e KRISHIV_TLS_KEY=/nonexistent/key.pem
