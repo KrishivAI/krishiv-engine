@@ -447,6 +447,39 @@ fn sql_namespace_commands_never_answer_for_a_declared_catalog() {
     assert!(block_on(s.catalog().is_cached("e")).unwrap());
 }
 
+/// SK3 E5: a command on a table named `cat.ns.t` of a declared catalog names that catalog; it is
+/// not resolved as the namespace `cat.ns` of `spark_catalog` (`REQUIRES_SINGLE_PART_NAMESPACE`).
+/// A query still reads the table, and a name nobody declared keeps Spark's error.
+#[test]
+fn a_command_on_a_declared_catalogs_table_names_the_catalog() {
+    let rt = runtime(DeclMode::Embedded, &LAKE);
+    let s = Session::builder().runtime(rt).build().unwrap();
+    run(&s, "CREATE TABLE default.e (x INT) USING parquet").unwrap();
+    let mut wrong = Vec::new();
+    for sql in [
+        "INSERT INTO lake.db.t VALUES (1)",
+        "INSERT INTO LAKE.db.t SELECT * FROM default.e",
+        "INSERT OVERWRITE lake.db.t SELECT 1",
+        "CREATE TABLE lake.db.t2 (a INT) USING parquet",
+        "DROP TABLE lake.db.t",
+        "ALTER TABLE lake.db.t ADD COLUMNS (b INT)",
+    ] {
+        match run(&s, sql) {
+            Err(e)
+                if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE"
+                    && e.to_string().contains("`lake`") => {}
+            other => wrong.push(format!("{sql}: {other:?}")),
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    let frame = block_on(s.sql("SELECT 1 AS x")).unwrap();
+    let e = block_on(frame.write().insert_into("lake.db.t")).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
+    assert_eq!(schema_of(&s, "SELECT * FROM lake.db.t").unwrap(), ["x"]);
+    let e = run(&s, "INSERT INTO nocat.db.t VALUES (1)").unwrap_err();
+    assert_eq!(e.error_class().name(), "REQUIRES_SINGLE_PART_NAMESPACE");
+}
+
 /// With a declared catalog current, a two-part name in a query resolves in that catalog, as in
 /// Spark, never as the embedded catalog's view or function; a table the declared catalog has is
 /// refused before it is read (the catalog resolves names only for now). `spark_catalog.` names, and
@@ -483,27 +516,24 @@ fn queries_under_a_declared_catalog_never_read_embedded_views_or_functions() {
     }
     assert_eq!(schema_of(&s, "SELECT * FROM db.t").unwrap(), ["x"]);
     // No write statement reaches a declared catalog's table in 0.3 (docs/guides/lakehouse-tables.md says so): it is
-    // refused, whatever the catalog's `option.write`, and nothing of the embedded catalog changes.
+    // refused naming the catalog (SK3 E5), whatever its `option.write`, and nothing of the embedded catalog changes.
     for (sql, expected) in [
         (
             "INSERT INTO lake.db.t VALUES (1)",
-            "REQUIRES_SINGLE_PART_NAMESPACE",
+            "KRISHIV_UNSUPPORTED_FEATURE",
         ),
         (
             "INSERT OVERWRITE lake.db.t VALUES (1)",
-            "REQUIRES_SINGLE_PART_NAMESPACE",
+            "KRISHIV_UNSUPPORTED_FEATURE",
         ),
         (
             "DELETE FROM lake.db.t WHERE x = 1",
-            "REQUIRES_SINGLE_PART_NAMESPACE",
+            "KRISHIV_UNSUPPORTED_FEATURE",
         ),
-        (
-            "UPDATE lake.db.t SET x = 2",
-            "REQUIRES_SINGLE_PART_NAMESPACE",
-        ),
+        ("UPDATE lake.db.t SET x = 2", "KRISHIV_UNSUPPORTED_FEATURE"),
         (
             "MERGE INTO lake.db.t USING default.e ON x = a WHEN MATCHED THEN DELETE",
-            "REQUIRES_SINGLE_PART_NAMESPACE",
+            "KRISHIV_UNSUPPORTED_FEATURE",
         ),
     ] {
         // `error` panics when the statement succeeds; the class says which refusal it is.

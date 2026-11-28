@@ -647,6 +647,7 @@ impl Session {
         let parsed = krishiv_sql::parse_multipart_identifier(table, &self.parser_options())
             .map_err(|e| e.error)?;
         let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
+        self.refuse_declared_table(&parts)?;
         TableName::resolve(&parts, &self.namespace_for_stored(&parts, env)?, env)
     }
 

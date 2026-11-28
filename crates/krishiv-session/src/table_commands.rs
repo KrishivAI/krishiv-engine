@@ -218,7 +218,25 @@ impl Session {
         env: &QueryEnv,
     ) -> Result<TableName, KrishivError> {
         let parts = crate::access::ddl_parts(name, env)?;
+        self.refuse_declared_table(&parts)?;
         TableName::resolve(&parts, &self.namespace_for(&parts, env)?, env)
+    }
+
+    /// Refuses a table name whose first of three or more parts is a declared catalog this session
+    /// sees (SK3 E5): only queries read such a table, and no command (`INSERT`, DDL, `DESCRIBE`,
+    /// a writer's table) reaches one yet, so the command names the catalog rather than resolving
+    /// the name as a namespace of `spark_catalog` (`REQUIRES_SINGLE_PART_NAMESPACE`). A catalog
+    /// the session does not see stays a namespace, as for a name nobody declared.
+    pub(crate) fn refuse_declared_table(&self, parts: &[String]) -> Result<(), KrishivError> {
+        if let [catalog, _, _, ..] = parts
+            && !catalog.eq_ignore_ascii_case(crate::catalog::CATALOG)
+            && let Some(name) = self.declared_catalogs().canonical(catalog)
+        {
+            return Err(unsupported(&format!(
+                "this command on a table of the catalog `{name}` (queries read its tables)"
+            )));
+        }
+        Ok(())
     }
 
     /// Refuses a table, view or SQL function in a schema with a default collation (`spark.sql.collation.schemaLevel.enabled`):

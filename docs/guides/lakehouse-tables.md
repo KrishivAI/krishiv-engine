@@ -45,8 +45,9 @@ Reads cover position deletes, deletion vectors and equality deletes.
 
 Writing Iceberg tables is not available from SQL or the DataFrame API in 0.3: `INSERT`, `CREATE TABLE ... USING
 iceberg` and the other writes do not reach the Iceberg writer yet. The session does not route a write statement to a
-declared catalog's table in 0.3, so every Iceberg table is read-only. `INSERT INTO lake.ns.t` is refused
-(`REQUIRES_SINGLE_PART_NAMESPACE`). Use Spark, or write the table as Delta or Parquet.
+declared catalog's table in 0.3, so every Iceberg table is read-only. `INSERT INTO lake.ns.t` (and any other
+command on `lake.ns.t`) is refused with `KRISHIV_UNSUPPORTED_FEATURE` naming the catalog `lake`. Use Spark, or write the
+table as Delta or Parquet.
 
 ## Declare a catalog
 
