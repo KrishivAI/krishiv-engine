@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from . import manifest as mf
+from .causes import report as causes_report
 from .denominator import compute
 from .junit import oracle_skips
 from .report import dashboard, ratchet_regressions, summarize, write_summary
@@ -75,10 +76,14 @@ def cmd_report(_: argparse.Namespace) -> None:
     print(f"wrote {DATA / 'DASHBOARD.md'}")
 
 
+def cmd_causes(a: argparse.Namespace) -> None:
+    print(causes_report(a.version, a.results, a.top))
+
+
 def cmd_ratchet(a: argparse.Namespace) -> None:
     """Fail when a fresh run lost a pass the committed summary had, or fell under `--min-rate` when it is given.
 
-    A version with no committed summary (3.5.7 before its first commit) has an empty pass list.
+    A version with no committed summary (3.5.10 before its first commit) has an empty pass list.
     """
 
     committed = DATA / "summary" / f"{a.version}.json"
@@ -137,11 +142,16 @@ def main() -> None:
     u.set_defaults(fn=cmd_run)
     r = sub.add_parser("report", help="render DASHBOARD.md from the committed summaries")
     r.set_defaults(fn=cmd_report)
+    c = sub.add_parser("causes", help="group the failures of a run's JUnit files by cause")
+    c.add_argument("--version", required=True)
+    c.add_argument("--results", type=Path, required=True, help="the run's `--out`/results/<version> directory")
+    c.add_argument("--top", type=int, default=25)
+    c.set_defaults(fn=cmd_causes)
     t = sub.add_parser("ratchet", help="fail on lost passes against the committed summary (and `--min-rate`)")
     t.add_argument("--version", required=True)
     t.add_argument("--current", type=Path, required=True, help="summary written by a fresh `run`")
     t.add_argument("--min-rate", type=float, help="blocking pass-rate floor in percent")
-    t.add_argument("--report-only", action="store_true", help="print, never fail (3.5.7)")
+    t.add_argument("--report-only", action="store_true", help="print, never fail (3.5.10)")
     t.set_defaults(fn=cmd_ratchet)
     a = p.parse_args()
     a.fn(a)
