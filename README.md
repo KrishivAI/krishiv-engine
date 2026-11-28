@@ -56,7 +56,7 @@ cargo install krishiv-cli   # needs Rust 1.97 or newer
 
 Prebuilt `krishiv` CLI binaries are not available yet; install the CLI from source with the command above.
 
-Install with the `pyarrow` extra: `collect()`, `show()` and `toArrow()` return Arrow data. Wheels cover Linux x86_64
+Install with the `pyarrow` extra: `collect()` returns a list of `Row` objects, `toArrow()` a PyArrow `Table`, and `show()` prints and returns `None`. Wheels cover Linux x86_64
 and aarch64 (manylinux and musllinux x86_64) and macOS arm64. For an x86-64 CPU without AVX2 use
 `pip install krishiv-compat` ([Supported CPUs](#supported-cpus)).
 
