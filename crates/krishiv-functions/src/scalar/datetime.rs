@@ -852,9 +852,8 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Arc::new(out.with_timezone("UTC")) as ArrayRef)
             })
         }
-        ("unix_seconds" | "unix_millis" | "unix_micros", [t])
-            if is_timestamp(t) && *t != ntz_type() =>
-        {
+        // A `TIMESTAMP_NTZ` (Spark 4.3) carries its wall clock as microseconds in UTC, read as they are.
+        ("unix_seconds" | "unix_millis" | "unix_micros", [t]) if is_timestamp(t) => {
             let per = match listed {
                 "unix_seconds" => 1_000_000,
                 "unix_millis" => 1_000,

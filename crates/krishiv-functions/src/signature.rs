@@ -444,6 +444,10 @@ pub enum InputType {
     /// A nanosecond timestamp of either kind and precision, as it is, and nothing implicit (Spark 4.3's
     /// `AnyTimestampNanoType`, as `unix_nanos` takes it); an untyped `NULL` becomes `TIMESTAMP_LTZ(9)`.
     StrictTimestampNanos,
+    /// Any timestamp, as it is, and nothing implicit: `TIMESTAMP`, `TIMESTAMP_NTZ` or a nanosecond one
+    /// (Spark 4.3's `TypeCollection(AnyTimestampType, AnyTimestampNanoType)`, as `unix_micros`, `unix_millis`
+    /// and `unix_seconds` take it); an untyped `NULL` becomes `TIMESTAMP`.
+    StrictAnyTimestamp,
     /// What `sum` and `avg` take: [`Self::Numeric`] with ANSI intervals, and a
     /// `TIMESTAMP` too, read as seconds (`DOUBLE`; Spark 4.2 casts it, a
     /// `DATE` or `TIMESTAMP_NTZ` it refuses). Its message names no timestamp.
@@ -479,6 +483,7 @@ impl InputType {
             Self::StrictTimestampNanos => {
                 "\"(TIMESTAMP_LTZ(P) OR TIMESTAMP_NTZ(P) WITH P IN [7, 9])\"".to_owned()
             }
+            Self::StrictAnyTimestamp => "(\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\" or \"(TIMESTAMP_LTZ(P) OR TIMESTAMP_NTZ(P) WITH P IN [7, 9])\")".to_owned(),
             Self::NumericOrTemporal => "(\"NUMERIC\" or \"DATE\" or \"TIMESTAMP\" or \"TIMESTAMP_NTZ\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL DAY TO SECOND\" or \"TIME\")".to_owned(),
             Self::Numeric { intervals: true } | Self::NumericOrTimestamp => {
                 "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned()

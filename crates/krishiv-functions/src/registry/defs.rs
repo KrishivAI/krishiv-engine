@@ -694,8 +694,17 @@ fn any_timestamp_or_time() -> InputType {
 
 /// `unix_seconds`, `unix_millis`, `unix_micros`: a `TIMESTAMP`, nothing implicit; Spark 4.3 also reads
 /// a nanosecond timestamp of either kind.
+/// `unix_seconds`, `unix_millis` and `unix_micros`: a `TIMESTAMP` before Spark 4.3; from 4.3 any timestamp,
+/// a `TIMESTAMP_NTZ` read as its wall clock in UTC (Spark 4.3.0 run: `unix_micros(TIMESTAMP_NTZ'2020-01-02
+/// 03:04:05.123456')` is 1577934245123456 in any session zone; 4.2.0 and 4.2.1 refuse it).
 fn unix_part_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
-    vec![nanos_arg(c, 0).unwrap_or(InputType::Strict(DataType::Timestamp))]
+    vec![
+        nanos_arg(c, 0).unwrap_or(if c.profile() >= SparkProfile::V4_3 {
+            InputType::StrictAnyTimestamp
+        } else {
+            InputType::Strict(DataType::Timestamp)
+        }),
+    ]
 }
 
 fn timestampadd_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
