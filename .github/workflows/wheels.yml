@@ -236,7 +236,9 @@ jobs:
   # macOS arm64 (11.0+), built and tested natively.
   macos-arm64:
     runs-on: macos-15
-    timeout-minutes: 60
+    # The dist-profile build alone takes 47 to 54 minutes on the macOS runner (since the Delta feature went into
+    # every wheel); 60 cancelled the abi3 job in the 2026-11-28 nightly and in #1082.
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:
