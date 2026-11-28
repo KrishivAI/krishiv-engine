@@ -786,14 +786,11 @@ impl Session {
     /// `CREATE` on the namespace does not show every table in it), otherwise `Browse` on it.
     /// Asked quietly: leaving an entry out is not a refusal (no audit record, no denial counter).
     pub(crate) async fn may_list(&self, securable: &Securable) -> bool {
-        if let Some(listed) = self.grants_listable(securable) {
-            return listed;
-        }
-        krishiv_plan::analyzer::allowed(
+        may_list_as(
             &*self.state.policy,
             &self.state.principal,
+            self.state.grants.as_deref(),
             securable,
-            Privilege::Browse,
         )
         .await
     }
@@ -854,38 +851,14 @@ impl Session {
     /// listing: `Browse` on it, or on any relation or function in it (a table grant shows where the
     /// table is).
     pub(crate) async fn may_list_namespace(&self, namespace: &str) -> bool {
-        let securable = Securable::Namespace(vec![
-            crate::catalog::CATALOG.to_owned(),
-            namespace.to_owned(),
-        ]);
-        if self.may_list(&securable).await {
-            return true;
-        }
-        let tables = crate::store::CatalogStore::tables_in(&*self.state.catalog.store, namespace);
-        for t in tables {
-            let ident = TableIdent {
-                catalog: crate::catalog::CATALOG.to_owned(),
-                namespace: vec![namespace.to_owned()],
-                name: t.name.clone(),
-            };
-            if self.may_list(&Securable::Table(ident)).await {
-                return true;
-            }
-        }
-        // Its functions count too (ADR 0048 A1 §3: "anything in it"; review r3 N4).
-        let functions = crate::store::CatalogStore::functions(&*self.state.catalog.store)
-            .in_namespace(namespace);
-        for name in functions {
-            let securable = Securable::Function(vec![
-                crate::catalog::CATALOG.to_owned(),
-                namespace.to_owned(),
-                name,
-            ]);
-            if self.may_list(&securable).await {
-                return true;
-            }
-        }
-        false
+        may_list_namespace_as(
+            &*self.state.policy,
+            &self.state.principal,
+            self.state.grants.as_deref(),
+            &self.state.catalog.store,
+            namespace,
+        )
+        .await
     }
 
     /// The error `e` of a metadata analysis (P3 PR-14d review B1), raised after the permanent
@@ -1604,9 +1577,55 @@ impl AccessPolicy for QuietPolicy {
     }
 }
 
+/// [`Session::may_list`] for a given principal and policy (also read by `information_schema`).
+pub(crate) async fn may_list_as(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    grants: Option<&crate::grants::GrantsPolicy>,
+    securable: &Securable,
+) -> bool {
+    if let Some(listed) = grants.and_then(|g| g.listable(principal, securable)) {
+        return listed;
+    }
+    krishiv_plan::analyzer::allowed(policy, principal, securable, Privilege::Browse).await
+}
+
+/// [`Session::may_list_namespace`] for a given principal, policy and store.
+pub(crate) async fn may_list_namespace_as(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    grants: Option<&crate::grants::GrantsPolicy>,
+    store: &crate::store::InMemoryCatalogStore,
+    namespace: &str,
+) -> bool {
+    let catalog = crate::catalog::CATALOG;
+    let namespace_securable = Securable::Namespace(vec![catalog.to_owned(), namespace.to_owned()]);
+    if may_list_as(policy, principal, grants, &namespace_securable).await {
+        return true;
+    }
+    for t in crate::store::CatalogStore::tables_in(store, namespace) {
+        let ident = TableIdent {
+            catalog: catalog.to_owned(),
+            namespace: vec![namespace.to_owned()],
+            name: t.name.clone(),
+        };
+        if may_list_as(policy, principal, grants, &Securable::Table(ident)).await {
+            return true;
+        }
+    }
+    // Its functions count too (ADR 0048 A1 §3: "anything in it"; review r3 N4).
+    for name in crate::store::CatalogStore::functions(store).in_namespace(namespace) {
+        let securable = Securable::Function(vec![catalog.to_owned(), namespace.to_owned(), name]);
+        if may_list_as(policy, principal, grants, &securable).await {
+            return true;
+        }
+    }
+    false
+}
+
 /// `KRISHIV_RESERVED_NAME` for a statement that creates, replaces, drops or
-/// writes something in the `system` catalog (P2-T126): its tables belong to
-/// the engine, whoever the principal is.
+/// writes something in the `system` catalog (P2-T126) or the session catalog's `information_schema`
+/// namespace: those tables belong to the engine, whoever the principal is.
 fn reject_system_write(securable: &Securable, privilege: Privilege) -> Result<(), KrishivError> {
     if !matches!(
         privilege,
@@ -1618,8 +1637,16 @@ fn reject_system_write(securable: &Securable, privilege: Privilege) -> Result<()
         Securable::Table(t) | Securable::View(t) if crate::system::is_system(&t.catalog) => {
             (t.to_string(), "tables")
         }
+        Securable::Table(t) | Securable::View(t)
+            if t.catalog.eq_ignore_ascii_case(crate::catalog::CATALOG)
+                && matches!(t.namespace.as_slice(), [n] if crate::information_schema::is_namespace(n)) =>
+        {
+            (t.to_string(), "tables")
+        }
         Securable::Namespace(parts)
-            if parts.first().is_some_and(|c| crate::system::is_system(c)) =>
+            if parts.first().is_some_and(|c| crate::system::is_system(c))
+                || matches!(parts.as_slice(), [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG)
+                    && crate::information_schema::is_namespace(n)) =>
         {
             (parts.join("."), "namespaces")
         }
@@ -1648,7 +1675,12 @@ fn reject_system_namespace(statement: &Statement) -> Result<(), KrishivError> {
                 [first, second] => {
                     crate::system::is_system(&first.value)
                         || (first.value.eq_ignore_ascii_case("spark_catalog")
-                            && crate::system::is_system(&second.value))
+                            && (crate::system::is_system(&second.value)
+                                || crate::information_schema::is_namespace(&second.value)))
+                }
+                [only] => {
+                    crate::system::is_system(&only.value)
+                        || crate::information_schema::is_namespace(&only.value)
                 }
                 parts => parts
                     .first()

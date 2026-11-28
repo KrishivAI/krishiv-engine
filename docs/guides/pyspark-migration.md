@@ -142,6 +142,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [SQL function bodies and the ANSI mode they were created under](../concepts/known-differences.md#sql-function-bodies-and-the-ansi-mode-they-were-created-under) |
 | [The relation cache is per session](../concepts/known-differences.md#the-relation-cache-is-per-session) |
 | [Checkpoint files and where a checkpoint lives](../concepts/known-differences.md#checkpoint-files-and-where-a-checkpoint-lives) |
+| [`${env:NAME}` and `${system:NAME}` in a server's SQL stay as written](../concepts/known-differences.md#envname-and-systemname-in-a-servers-sql-stay-as-written) |
 | [A second catalog, `system`, next to `spark_catalog`](../concepts/known-differences.md#a-second-catalog-system-next-to-spark_catalog) |
 | [`remote("local")` is not supported](../concepts/known-differences.md#remotelocal-is-not-supported) |
 | [A declared schema on a Delta read](../concepts/known-differences.md#a-declared-schema-on-a-delta-read) |

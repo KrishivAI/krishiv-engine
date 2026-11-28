@@ -435,6 +435,14 @@ SQLSTATE `53200`.
 A hash join partition with <buildRows> build rows still does not fit in memory after <depth> rounds of repartitioning: its build side is skewed on very few join keys. Increase "krishiv.memory.limit", or rewrite the query so the skewed keys are joined separately.
 ~~~
 
+## KRISHIV_JSON_NUMBER_NOT_DECIMAL
+
+SQLSTATE `22018`.
+
+~~~text
+Value <value> can not be deserialized as java.math.BigDecimal: JSON schema inference under "prefersDecimal" reads every floating-point number as a decimal, and this number has no decimal form. Set "prefersDecimal" to "false", or quote the value. Spark raises a Java `NumberFormatException` here without an error class.
+~~~
+
 ## KRISHIV_JVM_FUNCTION_UNSUPPORTED
 
 SQLSTATE `0A000`.

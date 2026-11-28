@@ -25,7 +25,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 11 | local_relation | done |  | Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit | P3-T012a | 1 |
 | 12 | sample | partial | with_replacement (Poisson) and deterministic_order (randomSplit) | Sample (Bernoulli, seed or one drawn per plan, Spark's XORShiftRandom order); Poisson needs a new IR field; deterministic_order needs the per-partition sort | P3-T012 | 3 |
 | 13 | offset | done |  | Offset | P2-T091a | 0 |
-| 14 | deduplicate | partial | a column subset and within_watermark | Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4 | P3-T012 | 3 |
+| 14 | deduplicate | partial | within_watermark | Distinct (all columns); a column subset is ColumnNames Deduplicate (analyzer: aggregate with first per non-key column); within_watermark → P4 | P3-T012 | 3 |
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
 | 17 | repartition | partial | the partition count (spark_partition_id, getNumPartitions) | Hint(REPARTITION n \| COALESCE n): rows pass through unchanged; the count is not applied to the plan; each call adds the warning "Hint REPARTITION(n) has no effect in a single-node plan." to the plan's warnings (Spark logs nothing; whether a client sees them is not checked) | P3-T012 | 3 |
@@ -78,7 +78,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Expression.expr_type
 
-22 arms: 4 done, 7 partial, 10 missing, 1 out of scope.
+22 arms: 5 done, 7 partial, 9 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -92,7 +92,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 8 | unresolved_regex | missing |  | Star { regex } (the field exists) | P3-T012 | 2 |
 | 9 | sort_order | missing |  | SortOrder, only inside Sort and Window | P3-T012 | 2 |
 | 10 | lambda_function | missing |  | Lambda | P3-T012 | 2 |
-| 11 | window | missing |  | ExprNode::Window (frames: LOWER_BOUND_REQUIRED_IN_WINDOW_FRAME, UPPER_BOUND_…, WINDOW_FUNCTION_REQUIRED) | P3-T012 | 2 |
+| 11 | window | done |  | ExprNode::Window | P3-T012 | 0 |
 | 12 | unresolved_extract_value | missing |  | Field | P3-T012 | 2 |
 | 13 | update_fields | missing |  | UpdateFields | P3-T012 | 2 |
 | 14 | unresolved_named_lambda_variable | missing |  | lambda-scoped Column (UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART) | P3-T012 | 2 |
