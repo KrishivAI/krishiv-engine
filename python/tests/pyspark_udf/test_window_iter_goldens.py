@@ -29,9 +29,9 @@ GOLDENS = json.loads((Path(__file__).resolve().parent / "window_iter" / "goldens
 #: Known gaps: (case regex, reason). A matching case must still differ from Spark.
 KNOWN_GAPS: list[tuple[str, str]] = [
     (
-        r"window/.*|iter/(arrow|pandas)_(first_only|twice)",
-        "the embedded facade refuses eval types 202/203 and 252/253 (NOT_IMPLEMENTED), and its scalar iterator "
-        "UDFs (204/251) differ on the first_only/twice cases, until its in-process runtime runs them (PR-48, P3-T085); "
+        r"window/.*",
+        "the embedded facade refuses eval types 202/203 and 252/253 (NOT_IMPLEMENTED) until its in-process "
+        "runtime runs them (PR-48, P3-T085); "
         "the server's worker pool matches every case "
         "(krishiv-udf-pool tests/window_iter_goldens.rs replays these goldens as SQL on a session over the pool)",
     ),
