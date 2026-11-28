@@ -990,8 +990,8 @@ impl Translator<'_> {
 
     /// `Aggregate` with `GROUP_TYPE_PIVOT` (`groupBy(...).pivot(col, values).agg(...)`): the
     /// session's pivot ([`krishiv_plan::grouped_pivot`]). Spark computes the values of a pivot
-    /// without any by running a query before planning; the translator runs none, so that case is
-    /// refused.
+    /// without any by running a query before planning (`collectPivotValues`); the translator
+    /// runs none, so it asks the host ([`super::LocalRequest::PivotValues`]).
     fn pivot(
         &mut self,
         a: &pb::Aggregate,
@@ -1003,21 +1003,41 @@ impl Translator<'_> {
             return Err(assertion("Aggregate with GROUP_TYPE_PIVOT needs a pivot"));
         };
         let column = self.required_expression(pivot.col.as_ref())?;
-        if pivot.values.is_empty() {
-            return Err(unsupported(
-                "a pivot without values (Spark runs a query for the distinct values)",
-            ));
-        }
-        let values = pivot
-            .values
-            .iter()
-            .map(|v| {
-                Ok(PivotValue {
-                    exprs: vec![self.literal_expression(v)?],
-                    alias: None,
+        let values = if pivot.values.is_empty() {
+            let (Some(input), Some(col)) = (a.input.as_deref(), pivot.col.as_ref()) else {
+                return Err(assertion("Aggregate with GROUP_TYPE_PIVOT needs an input"));
+            };
+            let ordinal = self.locals;
+            self.locals += 1;
+            let request = || {
+                Ok(super::LocalRequest::PivotValues {
+                    input: Box::new(input.clone()),
+                    column: Box::new(col.clone()),
                 })
-            })
-            .collect::<Result<Vec<_>>>()?;
+            };
+            self.conf
+                .local_relations
+                .pivot_values(ordinal, request)?
+                .into_iter()
+                .map(|l| {
+                    Ok(PivotValue {
+                        exprs: vec![Arc::new(Expr::new(ExprNode::Literal(l)))],
+                        alias: None,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            pivot
+                .values
+                .iter()
+                .map(|v| {
+                    Ok(PivotValue {
+                        exprs: vec![self.literal_expression(v)?],
+                        alias: None,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
         let keys: Vec<Expr> = keys.iter().map(|k| (**k).clone()).collect();
         krishiv_plan::grouped_pivot(
             input,

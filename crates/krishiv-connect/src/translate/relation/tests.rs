@@ -885,7 +885,7 @@ fn a_pivot_narrows_its_input_to_the_keys_the_pivot_column_and_what_the_aggregate
 }
 
 #[test]
-fn a_pivot_without_values_is_refused() {
+fn a_pivot_without_values_is_refused_without_a_host() {
     let e = fails(translate(&pivot_of(vec![])));
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     assert!(e.message().contains("pivot without values"));

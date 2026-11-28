@@ -32,8 +32,19 @@ struct Running {
 }
 
 async fn start() -> Running {
-    let manager = Arc::new(SessionManager::from_base(
-        Session::new().expect("session"),
+    start_with(None).await
+}
+
+async fn start_with(conf: Option<(&'static str, &'static str)>) -> Running {
+    let factory = move |_: &krishiv_session::auth::Authenticated, _: krishiv_session::Transport| {
+        let s = Session::new()?;
+        if let Some((k, v)) = conf {
+            s.conf().set(k, v)?;
+        }
+        Ok(s)
+    };
+    let manager = Arc::new(SessionManager::new(
+        Box::new(factory),
         SessionLimits::default(),
     ));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -826,6 +837,46 @@ fn aggregate(
         pivot: None,
         grouping_sets: Vec::new(),
     })))
+}
+
+fn pivot_without_values() -> pb::Relation {
+    relation(RelType::Aggregate(Box::new(pb::Aggregate {
+        input: Some(Box::new(source())),
+        group_type: pb::aggregate::GroupType::Pivot as i32,
+        grouping_expressions: vec![attr("id")],
+        aggregate_expressions: vec![call("sum", attr("b"), "s")],
+        pivot: Some(pb::aggregate::Pivot {
+            col: Some(attr("a")),
+            values: Vec::new(),
+        }),
+        grouping_sets: Vec::new(),
+    })))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pivot_without_values_takes_the_sorted_distinct_values_of_its_column() {
+    let server = start().await;
+    let got = run(&server, pivot_without_values()).await.expect("runs");
+    // Spark: `collectPivotValues` gives 10, 20; the columns are named by the values.
+    assert_eq!(
+        got,
+        strings(&[&["1", "200", "NULL"], &["2", "NULL", "NULL"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pivot_with_more_values_than_pivot_max_values_is_refused() {
+    let server = start_with(Some(("spark.sql.pivotMaxValues", "1"))).await;
+    let status = run(&server, pivot_without_values())
+        .await
+        .expect_err("refused");
+    // A legacy class has no bracketed prefix; the message is Spark's `_LEGACY_ERROR_TEMP_1324`.
+    assert!(
+        status
+            .message()
+            .starts_with("The pivot column a has more than 1 distinct values"),
+        "{status:?}"
+    );
 }
 
 fn renamed(input: pb::Relation, from: &str, to: &str) -> pb::Relation {

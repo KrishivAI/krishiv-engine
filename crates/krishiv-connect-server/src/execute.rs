@@ -50,6 +50,7 @@ mod catalog_call;
 #[cfg(test)]
 pub(crate) mod hooks;
 pub mod observed;
+mod pivot_values;
 pub mod schema;
 mod show_string;
 mod sql_command;
@@ -76,7 +77,7 @@ use krishiv_connect::proto::v4_3::execute_plan_response::{
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::plan::compressed_operation::OpType as CompressedOpType;
 use krishiv_connect::translate::{
-    CachedRemoteIds, Command as RunCommand, LocalRelations, LocalRequest, TranslateConf,
+    Built, CachedRemoteIds, Command as RunCommand, LocalRelations, LocalRequest, TranslateConf,
     UdfHost as TranslateHost, cached_remote_table, cached_request, command_not_supported,
     translate_command, translate_relation_with,
 };
@@ -953,14 +954,42 @@ async fn translate_locals(
     drop(translated);
     let mut built = Vec::with_capacity(requests.len());
     for request in requests {
-        built.push(build_local_relation(entry, request).await?);
+        built.push(match request {
+            LocalRequest::PivotValues { input, column } => {
+                Built::PivotValues(pivot_values::collect(entry, &input, &column, udfs).await?)
+            }
+            request => Built::Relation(build_local_relation(entry, request).await?),
+        });
     }
     let second = TranslateConf {
-        local_relations: LocalRelations::resolved(built),
+        local_relations: LocalRelations::resolved_with(built),
         ..translate
     };
     let translated = translate_input(plan, decompressed, &second, udfs)?;
     Ok((translated, cached.take()))
+}
+
+/// [`translate_locals`] for a relation the host synthesizes (a pivot's values query), as a
+/// bound plan. Boxed: the pre-pass recurses through the pivot's own input.
+///
+/// # Errors
+/// The translation errors, and `CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND`.
+fn request_translated<'a>(
+    entry: &'a SessionEntry,
+    input: Input<'a>,
+    udfs: &'a mut dyn TranslateHost,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Requested, KrishivError>> + Send + 'a>>
+{
+    Box::pin(async move {
+        let (translated, cached) = translate_locals(entry, input, None, udfs).await?;
+        match translated {
+            Translated::Relation(logical) => Requested::bind(entry, logical, &cached),
+            Translated::Command(_) => Err(krishiv_common::error::InternalError {
+                message: "a relation translated to a command".to_owned(),
+            }
+            .into()),
+        }
+    })
 }
 
 /// The relation of one request of the translator's first pass: an inline one through
@@ -987,6 +1016,12 @@ async fn build_local_relation(
             cached_request(&bytes, &entry.session().parser_options())?
         }
         LocalRequest::Catalog(call) => return catalog_call::run(entry.session(), call).await,
+        LocalRequest::PivotValues { .. } => {
+            return Err(krishiv_common::error::InternalError {
+                message: "a pivot request reached the relation builder".to_owned(),
+            }
+            .into());
+        }
     };
     entry
         .session()
