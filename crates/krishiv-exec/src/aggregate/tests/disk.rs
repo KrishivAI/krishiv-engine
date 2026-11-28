@@ -438,7 +438,7 @@ async fn a_spill_request_during_the_disk_phase_is_taken_between_tasks() {
     sink_to_runs(&agg, &s, &b, &sink_ctx, &g).await;
     let final_ctx = ctx(0, "agg");
     let asked_ctx = ctx(0, "agg");
-    let (finalized, asked) = bounded("the disk phase", async {
+    let (finalized, asked) = bounded_while_progressing("the disk phase", &agg, async {
         tokio::join!(agg.finalize(&g, &final_ctx), async {
             wait_until("a disk task at the gate", || gate.reached()).await;
             // A task holds its table at the gate: ask the aggregate to free
@@ -604,7 +604,7 @@ async fn a_requested_merged_task_writes_instead_of_splitting() {
     let asked_ctx = ctx(0, "agg");
     let hog_ctx = ctx(1, "hog");
     let mut hog = hog_ctx.consumer().reservation();
-    let (finalized, asked) = bounded("the disk phase", async {
+    let (finalized, asked) = bounded_while_progressing("the disk phase", &agg, async {
         tokio::join!(agg.finalize(&g, &final_ctx), async {
             wait_until("a merged task", || merged.reached()).await;
             // The first task is merged and holds its table: another
@@ -700,7 +700,7 @@ async fn a_lone_unsplittable_task_waits_for_the_arbitrator() {
         signal.set_spillable_bytes(hog.size());
         let final_ctx = ctx(0, "agg");
         let mut asked = false;
-        let (finalized, ()) = bounded("the disk phase", async {
+        let (finalized, ()) = bounded_while_progressing("the disk phase", &agg, async {
             tokio::join!(agg.finalize(&g, &final_ctx), async {
                 if !spillable {
                     return;

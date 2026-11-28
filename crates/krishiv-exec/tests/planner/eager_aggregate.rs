@@ -489,3 +489,66 @@ proptest! {
         }
     }
 }
+
+/// 240 rows whose `k` (12 values) and `i` (9 values, from its range; a few NULLs) make 36 pairs:
+/// keys that correlate, where the product of their counts (108) says an aggregate on both cannot
+/// reduce 4 times.
+fn correlated() -> Vec<Row> {
+    (0..240_i64)
+        .map(|n| {
+            (
+                n % 12,
+                (n % 11 != 0).then(|| i32::try_from(n % 9).unwrap()),
+                (n % 5 != 0).then(|| i128::from(n) * 100),
+                (n % 3 != 0).then(|| u8::try_from(n % 9).unwrap()),
+            )
+        })
+        .collect()
+}
+
+/// Correlated keys (perf-6 N3', TPC-DS q38/q87): the gate reads the largest distinct count of
+/// one key, not the product, so the aggregate moves below the join and returns the rows it
+/// returned above it.
+#[test]
+fn correlated_keys_move_below_the_join_and_return_the_same_rows() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = tables(dir.path(), &correlated(), &WEIGHTS, &rt);
+    for q in [
+        "SELECT DISTINCT w.wk, f.i FROM f JOIN w ON f.k = w.wk",
+        "SELECT w.wk, f.i, count(*), min(f.d), max(f.d) FROM f JOIN w ON f.k = w.wk \
+         GROUP BY w.wk, f.i",
+    ] {
+        assert!(fires(&t, q), "{q}\n{}", notes(&t, q));
+        let (on, off) = both(&t, q);
+        assert_eq!(on, off, "{q}");
+        assert!(!on.is_empty(), "{q}");
+    }
+}
+
+/// q38's shape: an `INTERSECT` of two distincts on correlated keys over the same dimension.
+/// Both distincts move below their joins, NULL keys included, and the rows do not change (the
+/// optimizer's `eager_correlated` test covers q38's own plan, where the dimension is read
+/// through a `Shift`).
+#[test]
+fn an_intersect_of_correlated_distincts_moves_both_and_returns_the_same_rows() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = tables(dir.path(), &correlated(), &WEIGHTS, &rt);
+    let q = "SELECT DISTINCT w.wk, f.i FROM f JOIN w ON f.k = w.wk WHERE f.d IS NOT NULL \
+             INTERSECT SELECT DISTINCT w.wk, f.i FROM f JOIN w ON f.k = w.wk WHERE f.s IS NOT NULL";
+    let n = notes(&t, q);
+    let plan = t.optimized(q, Order::Statistics).unwrap();
+    let text = plan.root().to_string();
+    assert!(
+        !n.contains("the other side is filtered or joined"),
+        "{q}\n{n}\n{text}"
+    );
+    assert!(
+        text.matches("PartialAggregate").count() >= 2,
+        "{q}\n{n}\n{text}"
+    );
+    let (on, off) = both(&t, q);
+    assert_eq!(on, off, "{q}");
+    assert!(!on.is_empty(), "{q}");
+}
