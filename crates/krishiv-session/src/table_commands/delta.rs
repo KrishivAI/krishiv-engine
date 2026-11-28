@@ -65,8 +65,11 @@ pub(super) fn keep_not_null(
 
 /// Whether `path` is absolute as Hadoop's `Path.isAbsolute` reads it: a leading `/`, or a URI
 /// scheme followed by one (`file:/t`, `s3://b/t`).
+/// On Windows a drive path (`C:\Users\t`, `C:/Users/t`) is absolute too.
 fn absolute(path: &str) -> bool {
     path.starts_with('/')
+        || (cfg!(windows)
+            && matches!(path.as_bytes(), [d, b':', b'\\' | b'/', ..] if d.is_ascii_alphabetic()))
         || path.split_once(':').is_some_and(|(scheme, rest)| {
             !scheme.is_empty()
                 && scheme

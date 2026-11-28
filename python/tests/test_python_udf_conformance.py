@@ -364,6 +364,7 @@ print(os.waitstatus_to_exitcode(status))
 """
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="os.fork does not exist on Windows")
 def test_os_fork_after_a_query_runs_udfs_in_a_child_with_a_new_session() -> None:
     assert ok(run_child(FORK, timeout=90)).strip().splitlines()[-1] == "0"
 

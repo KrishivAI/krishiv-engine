@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from typing import Any
 
+from krishiv._udf._localtime import _local_naive, _naive_to_utc  # noqa: F401  (shared with the UDF worker package)
 from krishiv.sql.row import Row, _create_row
 from krishiv.sql.types import (
     ArrayType,
@@ -170,7 +171,7 @@ def _value(value: Any, arrow_type: Any) -> Any:
 
     if pa.types.is_timestamp(arrow_type) and arrow_type.tz is not None:
         # An instant: PySpark returns it as a naive datetime in the client's local time zone.
-        return value.astimezone().replace(tzinfo=None)
+        return _local_naive(value)
     from krishiv.sql.variant import VariantVal, is_variant_struct
 
     if is_variant_struct(arrow_type):

@@ -334,7 +334,7 @@ def test_reader_table_and_text(spark: SparkSession, df, tmp_path) -> None:
     df.createOrReplaceTempView("t")
     assert spark.read.table("t").count() == 2
     path = tmp_path / "x.txt"
-    path.write_text("one\ntwo\n")
+    path.write_text("one\ntwo\n", newline="\n")
     assert [r.value for r in spark.read.text(str(path)).sort("value").collect()] == ["one", "two"]
     assert spark.read.text(str(path), wholetext=True).collect() == [Row(value="one\ntwo\n")]
 

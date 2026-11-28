@@ -201,6 +201,7 @@ class ReusedSQLTestCase(unittest.TestCase, SQLTestUtils):
         cls._previous_active, _session._active = _session._active, cls.spark
         cls.sc = _SparkContextStub()
         cls.tempdir = tempfile.NamedTemporaryFile(delete=False)
+        cls.tempdir.close()  # Windows cannot unlink a file that is still open
         os.unlink(cls.tempdir.name)
         cls.testData = [Row(key=i, value=str(i)) for i in range(100)]
         cls.df = cls.spark.createDataFrame(cls.testData)

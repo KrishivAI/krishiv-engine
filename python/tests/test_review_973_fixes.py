@@ -38,7 +38,7 @@ def test_nanosecond_timestamps_truncate_to_microseconds(spark: SparkSession) -> 
     pa = pytest.importorskip("pyarrow")
     table = pa.table({"t": pa.array([1001, 2000], type=pa.timestamp("ns", tz="UTC"))})
     got = [r[0] for r in spark.createDataFrame(table).collect()]
-    assert [t.timestamp() for t in got] == [0.000001, 0.000002]
+    assert [t.microsecond for t in got] == [1, 2]  # no .timestamp(): Windows rejects a pre-1970 local time
 
 
 def test_explicit_ntz_schema_keeps_wall_clock(spark: SparkSession) -> None:
@@ -64,7 +64,7 @@ def test_sampling_survives_a_column_named_like_the_temporary(spark: SparkSession
 
 
 def test_wholetext_false_resets_an_earlier_true(spark: SparkSession, tmp_path) -> None:
-    (tmp_path / "t.txt").write_text("a\nb\n")
+    (tmp_path / "t.txt").write_text("a\nb\n", newline="\n")
     reader = spark.read
     assert reader.text(str(tmp_path), wholetext=True).count() == 1
     assert reader.text(str(tmp_path), wholetext=False).count() == 2
@@ -141,7 +141,7 @@ def test_a_negative_nanosecond_timestamp_floors_to_microseconds(spark: SparkSess
 
     table = pa.table({"t": pa.array([-1001, None], type=pa.timestamp("ns", tz="UTC"))})
     values = spark.createDataFrame(table).collect()
-    assert values[0][0].timestamp() == pytest.approx(-0.000002)
+    assert (values[0][0] - datetime.datetime(1970, 1, 1)).total_seconds() == pytest.approx(-0.000002)
 
 
 def test_an_arrow_map_column_survives_the_python_value_fallback(spark: SparkSession) -> None:

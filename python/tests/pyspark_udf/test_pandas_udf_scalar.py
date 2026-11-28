@@ -8,6 +8,7 @@
 import os
 import random
 import shutil
+import sys
 import tempfile
 import time
 import unittest
@@ -507,6 +508,7 @@ class ScalarPandasUDFTestsMixin:
             actual = df.select(struct_f(struct(col("id"), col("id").cast("string").alias("str"))))
             self.assertEqual(expected, actual.collect())
 
+    @unittest.skipIf(sys.platform == "win32", "krishiv: needs the process time zone, which Windows cannot set from TZ")
     def test_vectorized_udf_struct_complex(self):
         df = self.spark.range(10)
         return_type = StructType(
@@ -1193,6 +1195,7 @@ class ScalarPandasUDFTestsMixin:
                 self.assertEqual(data[i][1], result[i][2])  # "date_copy" col
                 self.assertIsNone(result[i][3])  # "check_data" col
 
+    @unittest.skipIf(sys.platform == "win32", "krishiv: needs the process time zone, which Windows cannot set from TZ")
     def test_vectorized_udf_timestamps(self):
         schema = StructType(
             [StructField("idx", LongType(), True), StructField("timestamp", TimestampType(), True)]
@@ -1294,6 +1297,7 @@ class ScalarPandasUDFTestsMixin:
                 for (r,) in result:
                     self.assertTrue(r <= 3)
 
+    @unittest.skipIf(sys.platform == "win32", "krishiv: needs the process time zone, which Windows cannot set from TZ")
     def test_vectorized_udf_timestamps_respect_session_timezone(self):
         schema = StructType(
             [StructField("idx", LongType(), True), StructField("timestamp", TimestampType(), True)]
@@ -1484,6 +1488,7 @@ class ScalarPandasUDFTestsMixin:
             shutil.rmtree(tmp_dir)
 
     # Regression test for SPARK-23314
+    @unittest.skipIf(sys.platform == "win32", "krishiv: needs the process time zone, which Windows cannot set from TZ")
     def test_timestamp_dst(self):
         # Daylight saving time for Los Angeles for 2015 is Sun, Nov 1 at 2:00 am
         dt = [
@@ -2058,20 +2063,32 @@ class ScalarPandasUDFTests(ScalarPandasUDFTestsMixin, ReusedSQLTestCase):
         ReusedSQLTestCase.setUpClass()
 
         # Synchronize default timezone between Python and Java
+        # krishiv: Windows has no time.tzset (and its C runtime misreads an IANA TZ), so there only the session
+        # zone is set; TZ is set inside try and restored on failure so it cannot leak into later modules.
         cls.tz_prev = os.environ.get("TZ", None)  # save current tz if set
         tz = "America/Los_Angeles"
-        os.environ["TZ"] = tz
-        time.tzset()
+        if hasattr(time, "tzset"):
+            try:
+                os.environ["TZ"] = tz
+                time.tzset()
+            except BaseException:
+                cls._restore_tz()
+                raise
 
         cls.sc.environment["TZ"] = tz
         cls.spark.conf.set("spark.sql.session.timeZone", tz)
 
     @classmethod
-    def tearDownClass(cls):
-        del os.environ["TZ"]
+    def _restore_tz(cls):
+        os.environ.pop("TZ", None)
         if cls.tz_prev is not None:
             os.environ["TZ"] = cls.tz_prev
-        time.tzset()
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._restore_tz()
         ReusedSQLTestCase.tearDownClass()
 
 

@@ -19,7 +19,8 @@ flavour=$3
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 "$python" -m venv "$work/venv"
-py="$work/venv/bin/python"
+# A Windows venv keeps its interpreter in Scripts\ (Git Bash, the shell of the Windows runner).
+if [ -x "$work/venv/Scripts/python.exe" ]; then py="$work/venv/Scripts/python.exe"; else py="$work/venv/bin/python"; fi
 "$py" -m pip install --quiet --upgrade pip
 # --no-deps: the wheel requires pyarrow, which has no musllinux wheel and would build from source (an hour);
 # pyarrow comes from the binary-only loop below, and the smoke falls back to count() without it.
@@ -67,8 +68,9 @@ if sys.argv[1] == "cp314t":
     # declared free-threading safe).
     assert not sys._is_gil_enabled(), "importing krishiv enabled the GIL"
 PY
+targets=("$repo/python/tests")
 if [ "$flavour" = cp314t ]; then
-  PYTHON_GIL=0 "$py" -m pytest -q -rs "$repo/python/tests"
+  PYTHON_GIL=0 "$py" -m pytest -q -rs "${targets[@]}"
 else
-  "$py" -m pytest -q -rs "$repo/python/tests"
+  "$py" -m pytest -q -rs "${targets[@]}"
 fi

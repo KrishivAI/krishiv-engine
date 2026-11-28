@@ -7,7 +7,7 @@ name: Binaries
 # jobs keep the default target. The binary checks the CPU on start, before its
 # constructors (krishiv_alloc), and names the missing feature and the compat
 # binary (krishiv_common::cpu). The macOS arm64 binary (Apple silicon, no CPU level to choose) is built
-# natively. Nothing is published here.
+# natively. The Windows x86-64 binary (MSVC) is built natively at the plain x86-64 baseline. Nothing is published here.
 #
 # Runs when this file or the start-up CPU check changes, by hand, and from other
 # workflows.
@@ -214,4 +214,44 @@ jobs:
         with:
           name: krishiv-macos-arm64
           path: out/krishiv-macos-arm64
+          if-no-files-found: error
+
+  cli-windows-x86_64:
+    needs: nightly-green
+    if: ${{ !cancelled() && (needs.nightly-green.result == 'success' || needs.nightly-green.result == 'skipped') }}
+    name: cli (krishiv-windows-x86_64.exe)
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      ARTIFACT: krishiv-windows-x86_64.exe
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: krishiv-windows-x86_64
+      - uses: $/.github/actions/setup-uv
+      - name: Build
+        run: |
+          cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
+          mkdir -p out
+          cp target/dist/krishiv.exe "out/$ARTIFACT"
+      - name: Smoke test
+        run: |
+          "out/$ARTIFACT" --version
+          "out/$ARTIFACT" sql -e "SELECT 1"
+          .github/scripts/console-smoke.sh "out/$ARTIFACT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: krishiv-windows-x86_64.exe
+          path: out/krishiv-windows-x86_64.exe
           if-no-files-found: error

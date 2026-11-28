@@ -24,6 +24,10 @@ from krishiv.sql.session import SparkSession
 ARROW_BATCHED = 101
 
 
+# Open on Windows: pool calls do not overlap and an interrupt does not reach a running call.
+WINDOWS_POOL = pytest.mark.skipif(sys.platform == "win32", reason="Windows UDF pool concurrency and interrupt: open")
+
+
 def _spark() -> SparkSession:
     config = [("krishiv.python.udf.threads", "4")]
     return SparkSession(_native.Session(config), config)
@@ -61,7 +65,7 @@ def test_a_raising_udf_fails_with_python_exception_and_its_traceback() -> None:
     assert "ValueError: boom" in text, text
 
 
-@pytest.mark.parametrize("thread_safe", [False, True])
+@pytest.mark.parametrize("thread_safe", [False, pytest.param(True, marks=WINDOWS_POOL)])
 def test_thread_safe_false_never_runs_two_calls_at_once(thread_safe: bool) -> None:
     lock = threading.Lock()
     state = {"active": 0, "peak": 0}
@@ -136,6 +140,7 @@ def test_an_encoded_result_of_a_plain_declared_type_is_refused(encode) -> None:
         spark.sql("SELECT py_encoded(id) FROM range(3)").collect()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="os.fork does not exist on Windows")
 @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
 def test_a_forked_child_runs_udfs_on_a_pool_of_its_own() -> None:
     # The child's copy of the parent's pool has no threads (review B2): its call must not hang. The child
@@ -203,6 +208,7 @@ def test_a_udf_that_runs_a_query_fails_instead_of_waiting_for_itself() -> None:
     assert "CONTEXT_ONLY_VALID_ON_DRIVER" in text, text
 
 
+@WINDOWS_POOL
 def test_a_running_call_of_a_failed_query_is_interrupted() -> None:
     # Design §2.5 "Cancel" (T098b I2): when the query fails, another call still running in Python gets
     # an asynchronous KeyboardInterrupt instead of holding its pool thread until it ends. Two one-row
@@ -254,6 +260,7 @@ while time.monotonic() < _end:
 """
 
 
+@WINDOWS_POOL
 def test_a_failed_query_interrupts_a_call_only_after_the_import_it_is_in(tmp_path, monkeypatch) -> None:
     # An interrupt raised inside importlib can land just after `_imp.acquire_lock()` and before the `try` that
     # releases it, which leaves the process's import lock held and every later import waiting (seen on CPython

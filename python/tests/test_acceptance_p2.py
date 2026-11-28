@@ -25,7 +25,7 @@ def test_as_dict_recursive(spark: SparkSession) -> None:
 
 
 def test_read_text(spark: SparkSession, tmp_path: Path) -> None:
-    (tmp_path / "a.txt").write_text("one\ntwo\n")
+    (tmp_path / "a.txt").write_text("one\ntwo\n", newline="\n")
     rows = spark.read.text(str(tmp_path / "a.txt")).collect()
     assert [r.value for r in rows] == ["one", "two"]
     whole = spark.read.text(str(tmp_path / "a.txt"), wholetext=True).collect()

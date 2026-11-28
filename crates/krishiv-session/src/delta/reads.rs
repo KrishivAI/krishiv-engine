@@ -187,7 +187,7 @@ impl DeltaReads {
         };
         let at = self.paths.locate_with_options(text, options)?;
         let url = if at.display.starts_with("file:") {
-            let local = format!("/{}", at.path.as_ref());
+            let local = local_dir_path(at.path.as_ref());
             Url::from_directory_path(&local)
                 .map_err(|()| internal(&format!("the Delta table path {local}")))?
         } else {
@@ -431,4 +431,39 @@ fn internal(message: &str) -> KrishivError {
 /// opens its own table.
 pub(super) fn table_key(store: &StoreId, root: &Url) -> String {
     format!("{}\u{0}{}", store.key(), root.as_str())
+}
+
+/// The absolute local directory path for a store-relative `path`: a POSIX path gains its root `/`;
+/// a Windows drive path (`C:/Users/t`) is already absolute and `Url::from_directory_path` takes it
+/// as is (a leading `/` would make it `/C:/...`, which Windows refuses). A UNC location
+/// (`//server/share/t`) is not handled: it still becomes `///server/share/t`.
+fn local_dir_path(path: &str) -> String {
+    local_dir_path_for(path, cfg!(windows))
+}
+
+/// [`local_dir_path`] with the platform named, so both shapes are testable on one host.
+fn local_dir_path_for(path: &str, windows: bool) -> String {
+    let drive = windows && matches!(path.as_bytes(), [d, b':', ..] if d.is_ascii_alphabetic());
+    if drive {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    }
+}
+
+#[cfg(test)]
+mod local_dir_path_tests {
+    use super::local_dir_path_for;
+
+    #[test]
+    fn a_posix_path_gains_its_root() {
+        assert_eq!(local_dir_path_for("tmp/t", false), "/tmp/t");
+        assert_eq!(local_dir_path_for("tmp/t", true), "/tmp/t");
+    }
+
+    #[test]
+    fn a_windows_drive_path_is_already_absolute_only_on_windows() {
+        assert_eq!(local_dir_path_for("C:/Users/t", true), "C:/Users/t");
+        assert_eq!(local_dir_path_for("C:/Users/t", false), "/C:/Users/t");
+    }
 }

@@ -221,6 +221,12 @@ that keeps state across its iterator (a running total, a call count) sees other 
 operator also reads all its input and keeps all its output before the next operator reads any, so a `LIMIT` above
 it does not stop it early.
 
+### Windows: the Python UDF worker pool does not overlap calls or interrupt a running call
+
+On Windows the Python UDF worker pool runs calls one after another where Linux and macOS run them at once, and
+an interrupt (Ctrl-C, query cancel) does not reach a call that is already running: the call finishes first. Results
+are the same; only latency and cancellation differ.
+
 ## Python artifacts in server mode
 
 The Spark Connect server does not hand a session's Python artifacts to its UDF workers yet: pyfiles and archives a

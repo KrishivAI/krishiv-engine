@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import importlib
 import re
+import sys
 import unittest
 from typing import Any
 
@@ -182,6 +183,10 @@ def _diffs(table: str) -> dict[str, list[tuple[str, str, str]]]:
 
 @pytest.mark.parametrize("table", sorted(TABLES))
 def test_the_table_matches_spark_cell_for_cell(table: str) -> None:
+    if sys.platform == "win32" and table == "pandas_udf_return_base":
+        # krishiv: the golden is Spark's run under TZ=America/Los_Angeles; Windows has no time.tzset, so the process
+        # zone stays UTC and the naive datetimes come back 8 h apart.
+        pytest.skip("needs the process time zone, which Windows cannot set from TZ")
     unexpected = [
         f"{row} [{column}]: Spark {expected!r}, Krishiv {got!r}"
         for row, cells in _diffs(table).items()

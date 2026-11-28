@@ -73,11 +73,44 @@ fn capsule_name(capsule: &Bound<'_, PyCapsule>) -> String {
 /// the GIL).
 pub(crate) struct Detaching<R>(pub(crate) R);
 
+#[cfg(not(windows))]
 unsafe extern "C" {
     /// Whether the calling thread holds the GIL. Not in the limited API, so
     /// pyo3-ffi leaves it out of abi3 builds; every CPython 3.11+ exports it,
     /// and the wheels (Linux, macOS) resolve it from the host interpreter.
-    fn PyGILState_Check() -> std::ffi::c_int;
+    #[link_name = "PyGILState_Check"]
+    fn gilstate_check() -> std::ffi::c_int;
+}
+
+/// Windows links an extension against `python3.lib`, the stable-ABI import library, which has no
+/// `PyGILState_Check` (the link fails with LNK2019). It is looked up at run time in the interpreter's
+/// own DLL instead. Only the 3.11 path calls it, so the DLL is `python311.dll`; when it cannot be
+/// found the answer is "not attached", which skips the detach (never an unsound detach).
+#[cfg(windows)]
+unsafe fn gilstate_check() -> std::ffi::c_int {
+    use std::ffi::{c_char, c_int, c_void};
+    use std::sync::OnceLock;
+    type Check = unsafe extern "C" fn() -> c_int;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleA(name: *const c_char) -> *mut c_void;
+        fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
+    }
+    static CHECK: OnceLock<Option<Check>> = OnceLock::new();
+    let check = CHECK.get_or_init(|| {
+        // SAFETY: both names are NUL-terminated literals; the module handle is only passed back to
+        // `GetProcAddress`, and a non-null result is `PyGILState_Check`, of the declared signature.
+        unsafe {
+            let module = GetModuleHandleA(c"python311.dll".as_ptr());
+            if module.is_null() {
+                return None;
+            }
+            let f = GetProcAddress(module, c"PyGILState_Check".as_ptr());
+            (!f.is_null()).then(|| std::mem::transmute::<*mut c_void, Check>(f))
+        }
+    });
+    // SAFETY: a plain query of the calling thread's state, callable with or without the GIL.
+    check.map_or(0, |f| unsafe { f() })
 }
 
 /// Whether the calling thread is attached to Python (holds the GIL, or on a
@@ -98,7 +131,7 @@ fn attached() -> bool {
     if version < 0x030C_0000 {
         // SAFETY: a plain query of the calling thread's state; callable with
         // or without the GIL.
-        return unsafe { PyGILState_Check() } != 0;
+        return unsafe { gilstate_check() } != 0;
     }
     // SAFETY: on 3.12+ the swap reads and writes only the calling thread's
     // current state: NULL detaches it if it was attached, and the swap back
