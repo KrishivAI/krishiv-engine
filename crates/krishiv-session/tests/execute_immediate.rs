@@ -60,6 +60,30 @@ fn rows(s: &Session, sql: &str) -> Vec<Vec<String>> {
 }
 
 #[test]
+fn array_and_map_arguments_keep_their_type() {
+    let s = session();
+    let sql = "EXECUTE IMMEDIATE 'SELECT typeof(:p), CAST(:p AS STRING)' USING ";
+    assert_eq!(
+        rows(&s, &format!("{sql}ARRAY(1, 2, 3) AS p")),
+        vec![vec!["array<int>".to_owned(), "[1, 2, 3]".to_owned()]]
+    );
+    assert_eq!(
+        rows(&s, &format!("{sql}ARRAY(ARRAY(1, 2), ARRAY(3, 4)) AS p")),
+        vec![vec![
+            "array<array<int>>".to_owned(),
+            "[[1, 2], [3, 4]]".to_owned()
+        ]]
+    );
+    assert_eq!(
+        rows(&s, &format!("{sql}MAP(1, 'one', 2, 'two') AS p")),
+        vec![vec![
+            "map<int,string>".to_owned(),
+            "{1 -> one, 2 -> two}".to_owned()
+        ]]
+    );
+}
+
+#[test]
 fn positional_and_named_arguments_bind() {
     let s = session();
     run(&s, "DECLARE a STRING");
@@ -329,10 +353,10 @@ fn values_keep_their_type_and_their_own_token() {
         ),
         [["interval year to month"]]
     );
-    // Types the text cannot carry exactly are refused.
+    // Nested values bind as their constructor under a cast (`array_and_map_arguments_keep_their_type`).
     assert_eq!(
-        class(&s, "EXECUTE IMMEDIATE 'SELECT ?' USING ARRAY(1)"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        rows(&s, "EXECUTE IMMEDIATE 'SELECT typeof(?)' USING ARRAY(1)"),
+        [["array<int>"]]
     );
 }
 

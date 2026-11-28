@@ -19,7 +19,8 @@ use krishiv_common::error::{
     RowSubqueryTooManyRows, UnboundSqlParameter, UnsupportedExprForParameter,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::Literal;
+use krishiv_plan::analyzer::VariableValue;
+use krishiv_plan::{Expr as PlanExpr, ExprNode, Literal};
 use krishiv_sql::ast::{ExecuteImmediate, Expr, ExprKind, Statement};
 use krishiv_types::DataType;
 
@@ -104,9 +105,7 @@ impl Session {
         for a in &e.using {
             refuse_subquery(&a.value)?;
             let sql = padded_select("SELECT ", slice(&a.value), a.value.span.start, "");
-            let (_, value) = self
-                .eval_variable_value(&sql, text, e.span, a.value.span)
-                .await?;
+            let (_, value) = self.eval_variable(&sql, text, e.span, a.value.span).await?;
             let name = match (&a.alias, &a.value.kind) {
                 (Some(alias), _) => Some(alias.value.clone()),
                 (None, ExprKind::Column(parts)) if parts.len() == 1 => {
@@ -117,7 +116,7 @@ impl Session {
             args.push(Argument {
                 explicit: a.alias.is_some(),
                 name,
-                sql: render_literal(&value, escaped)?,
+                sql: render_value(&value, escaped)?,
                 shown: shown_expression(slice(&a.value)),
             });
         }
@@ -514,6 +513,38 @@ fn pad_value(out: &mut String, value: &str, rest: &str) -> std::ops::Range<usize
         out.push(' ');
     }
     span
+}
+
+/// A variable's value as SQL text: a scalar through [`render_literal`]; an `ARRAY`, `STRUCT` or
+/// `MAP` as its constructor (`array(..)`, `named_struct(..)`, `map(..)`) under the `CAST` to its
+/// type, so it reads back as the same value and type.
+fn render_value(value: &VariableValue, escaped_strings: bool) -> Result<String, KrishivError> {
+    fn go(e: &PlanExpr, escaped: bool) -> Result<String, KrishivError> {
+        match &e.node {
+            ExprNode::Literal(l) => render_literal(l, escaped),
+            ExprNode::Cast { expr, to, .. } => Ok(format!(
+                "CAST({} AS {})",
+                go(expr, escaped)?,
+                to.simple_string()
+            )),
+            ExprNode::Function(f) => {
+                let args = f
+                    .args
+                    .iter()
+                    .map(|a| go(a, escaped))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(format!("{}({})", f.name, args.join(", ")))
+            }
+            _ => Err(KrishivUnsupportedFeature {
+                feature: "a parameter value of a nested type".to_owned(),
+            }
+            .into()),
+        }
+    }
+    match value {
+        VariableValue::Scalar(l) => render_literal(l, escaped_strings),
+        VariableValue::Nested(e) => go(e, escaped_strings),
+    }
 }
 
 /// `value` as SQL text that reads back as the same value and type, or an unsupported-feature
