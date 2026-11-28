@@ -295,6 +295,37 @@ impl IcebergTable {
         ))
     }
 
+    /// Every object under the directory `location` (a table location or a path below it), at any
+    /// depth, as `(uri, last-modified in ms, key relative to `location`)`; the URI is `location`
+    /// with the key appended, so it keeps the scheme and authority the table was registered with.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a location no store serves; the listing's failure.
+    pub(crate) async fn list_under(
+        &self,
+        location: &str,
+    ) -> Result<Vec<(String, i64, String)>, KrishivError> {
+        let at = self.registered.paths.locate(location)?;
+        let prefix: &str = AsRef::<str>::as_ref(&at.path);
+        let base = location.trim_end_matches('/');
+        let listed = self.registered.io.list(&at.store, &at.path).await?;
+        let mut out = Vec::with_capacity(listed.len());
+        for meta in listed {
+            let key: &str = AsRef::<str>::as_ref(&meta.location);
+            let rel = key
+                .strip_prefix(prefix)
+                .unwrap_or(key)
+                .trim_start_matches('/')
+                .to_owned();
+            out.push((
+                format!("{base}/{rel}"),
+                meta.last_modified.timestamp_millis(),
+                rel,
+            ));
+        }
+        Ok(out)
+    }
+
     /// `krishiv.catalog.maxMetadataBytes`, the parse limit on what a procedure reads.
     pub(crate) fn max_metadata_bytes(&self) -> u64 {
         self.max_metadata_bytes

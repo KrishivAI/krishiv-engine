@@ -21,8 +21,13 @@ use super::sink::io_clock;
 use super::table::IcebergTable;
 
 pub(crate) mod expire;
+pub(crate) mod orphans;
+pub(crate) mod paths;
 pub(crate) mod rewrite_options;
 pub(crate) mod rewrite_plan;
+
+/// `(name, location)` of each other table of a namespace.
+pub type SiblingLocations = Vec<(String, String)>;
 
 /// Where a procedure finds its table: the catalog that serves `CALL cat.system.p(table => ..)`.
 pub trait ProcedureTables: fmt::Debug + Send + Sync {
@@ -32,6 +37,20 @@ pub trait ProcedureTables: fmt::Debug + Send + Sync {
     /// # Errors
     /// `KRISHIV_ICEBERG_PROCEDURE_TABLE_NOT_FOUND`, or the catalog's failure.
     fn open<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<IcebergTable, KrishivError>>;
+
+    /// The other tables of `name`'s namespace as `(name, location)`, for `remove_orphan_files`'s
+    /// nested-table check (design 36e §4.4); `None` when the catalog cannot list (the check is
+    /// then skipped with a warning).
+    ///
+    /// # Errors
+    /// The catalog's failure.
+    fn sibling_locations<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<SiblingLocations>, KrishivError>> {
+        let _ = name;
+        Box::pin(async { Ok(None) })
+    }
 }
 
 const fn req(name: &'static str, data_type: ProcedureType) -> ProcedureParameter {
@@ -216,7 +235,7 @@ impl Procedure for Maintenance {
 
     fn call<'a>(
         &'a self,
-        _ctx: &'a ProcedureContext,
+        ctx: &'a ProcedureContext,
         args: Vec<ProcedureValue>,
     ) -> BoxFuture<'a, Result<RecordBatch, KrishivError>> {
         Box::pin(async move {
@@ -233,8 +252,9 @@ impl Procedure for Maintenance {
                 .into());
             }
             match self.name {
-                "expire_snapshots" => self.expire(table, &args).await,
+                "expire_snapshots" => self.expire(table, &args, ctx.memory.as_ref()).await,
                 "rewrite_data_files" => self.open_for_rewrite(table).await,
+                "remove_orphan_files" => self.orphans(table, &args, ctx.memory.as_ref()).await,
                 other => Err(unsupported(other)),
             }
         })
@@ -253,10 +273,93 @@ impl Maintenance {
         Ok(RecordBatch::new_empty(Arc::new(Schema::empty())))
     }
 
+    /// `remove_orphan_files`: one row per orphan file (`orphan_file_location`).
+    async fn orphans(
+        &self,
+        table: &str,
+        args: &[ProcedureValue],
+        memory: Option<&Arc<dyn krishiv_memory::MemoryPool>>,
+    ) -> Result<RecordBatch, KrishivError> {
+        // The parameters, in the order of `REMOVE_ORPHAN_FILES`.
+        let arg = |i: usize| args.get(i).unwrap_or(&ProcedureValue::Null);
+        check_concurrency(arg(4))?;
+        let map = |v: &ProcedureValue| -> std::collections::BTreeMap<String, String> {
+            match v {
+                ProcedureValue::StringMap(m) => m.iter().cloned().collect(),
+                _ => std::collections::BTreeMap::new(),
+            }
+        };
+        for (i, name) in [(5, "file_list_view"), (9, "prefix_listing")] {
+            let given = !matches!(
+                arg(i),
+                ProcedureValue::Null | ProcedureValue::Boolean(false)
+            );
+            if given {
+                return Err(KrishivUnsupportedFeature {
+                    feature: format!("remove_orphan_files with {name}"),
+                }
+                .into());
+            }
+        }
+        let opts = orphans::OrphanArgs {
+            older_than_ms: match arg(1) {
+                ProcedureValue::TimestampMicros(us) => Some(us.div_euclid(1000)),
+                _ => None,
+            },
+            location: match arg(2) {
+                ProcedureValue::String(l) => Some(l.clone()),
+                _ => None,
+            },
+            dry_run: matches!(arg(3), ProcedureValue::Boolean(true)),
+            max_concurrent_deletes: long(arg(4)).and_then(|n| usize::try_from(n).ok()),
+            equivalences: paths::Equivalences::with(&map(arg(6)), &map(arg(7))),
+            mode: orphans::Mode::parse(match arg(8) {
+                ProcedureValue::String(m) => Some(m.as_str()),
+                _ => None,
+            })?,
+            stream_results: matches!(arg(10), ProcedureValue::Boolean(true)),
+            siblings: None,
+        };
+        let t = self.tables.open(table).await?;
+        let (committer, io, clock) = t.maintenance_parts(io_clock)?;
+        let mut opts = opts;
+        opts.siblings = self.tables.sibling_locations(table).await?;
+        let list = |location: String| {
+            let t = &t;
+            async move { t.list_under(&location).await }
+        };
+        let done = orphans::remove(
+            committer.as_ref(),
+            &io,
+            clock.as_ref(),
+            &list,
+            t.max_metadata_bytes(),
+            memory,
+            &opts,
+        )
+        .await?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "orphan_file_location",
+            DataType::Utf8,
+            false,
+        )]));
+        RecordBatch::try_new(
+            schema,
+            vec![Arc::new(arrow_array::StringArray::from(done.orphans)) as ArrayRef],
+        )
+        .map_err(|e| {
+            krishiv_common::error::InternalError {
+                message: format!("the remove_orphan_files result: {e}"),
+            }
+            .into()
+        })
+    }
+
     async fn expire(
         &self,
         table: &str,
         args: &[ProcedureValue],
+        memory: Option<&Arc<dyn krishiv_memory::MemoryPool>>,
     ) -> Result<RecordBatch, KrishivError> {
         // The parameters, in the order of `EXPIRE_SNAPSHOTS`.
         let arg = |i: usize| args.get(i).unwrap_or(&ProcedureValue::Null);
@@ -283,6 +386,7 @@ impl Maintenance {
             clock.as_ref(),
             t.max_metadata_bytes(),
             &opts,
+            memory,
         )
         .await?;
         let d = done.deleted;

@@ -310,9 +310,12 @@ result. Pending, not stubbed: MERGE through SQL. Concurrent writers: `race_k` (t
   data files in the background, and a `put` dropped in flight deletes its file once the store is done; a data file
   whose close is dropped after the store completed it is `write.rs`'s documented limit (an unreferenced file).
 - **Expire cleanup memory (PR-36e, review of #983):** `maintenance/expire.rs` `cleanup` holds the paths every
-  removed snapshot reached, every kept snapshot reached and the decoded manifests' paths in memory, uncharged to any
-  pool (each manifest is capped by `krishiv.catalog.maxMetadataBytes`, the sum is not), as Java's
-  `ReachableFileCleanup` holds its sets. Follow-up: charge the sets to the procedure's pool or walk in bounded batches.
+  removed snapshot reached, every kept snapshot reached and the decoded manifests' paths in memory, as Java's
+  `ReachableFileCleanup` does. They are charged to the session's pool (`ProcedureContext::memory`; each path's length
+  plus 64 bytes, once per set holding it, so an over-estimate); a refusal is the memory error before any delete.
+  Not bounded in batches: a table whose paths exceed the pool fails, never partially deletes. Without a pool
+  (a caller outside the session) nothing is charged.
+- **`remove_orphan_files` (PR-36e unit 2b, `maintenance/orphans.rs` + `paths.rs`):** `classify` is the pure decision (valid set vs listing, `older_than`, hidden paths, `prefix_mismatch_mode`); `remove` loads with `checked_load_located`, gathers the valid set (`expire::reachable` over every snapshot, metadata files, statistics, `version-hint.text`) and lists through `IcebergTable::list_under`. The nested-table check (`orphans::check_shared`, `KRISHIV_ICEBERG_ORPHAN_LOCATION_SHARED`) uses `ProcedureTables::sibling_locations` (the REST catalog lists its namespace and loads each table; default `None` = skipped with a warning; partial: own namespace only). Listed keys are the store's raw key (paths are built with `Path::parse`, never percent-encoded or decoded). Not done yet: no S3/MinIO listing test; the valid set and listing are held in memory, uncharged (as the expire limit above).
 - **Expire and concurrent refs (review of #983):** a snapshot removal asserts every ref as planned, `main` included
   (`maintenance/expire.rs` `request`), so a concurrent rollback or a ref moved onto a removed snapshot conflicts and the
   expire plans again. Two costs: a concurrent append to `main` conflicts too, so a busy table can use up

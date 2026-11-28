@@ -126,6 +126,7 @@ impl Session {
         }
         let ctx = ProcedureContext {
             catalog: catalog.clone(),
+            memory: Some(std::sync::Arc::clone(&self.state.memory)),
         };
         let target = loaded
             .table(&args)

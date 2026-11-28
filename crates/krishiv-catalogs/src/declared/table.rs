@@ -569,26 +569,66 @@ impl std::fmt::Debug for RestProcedureTables {
     }
 }
 
+impl RestProcedureTables {
+    /// `(namespace, table)` of a call's table argument; `None` for a bare name.
+    ///
+    /// # Errors
+    /// Iceberg 1.12.0's argument error for text that is not an identifier.
+    fn split_name(&self, name: &str) -> Result<Option<(Vec<String>, String)>, KrishivError> {
+        // A multipart identifier, as the session's `MODIFY` check parsed it (`` db.`t.v1` ``).
+        let Ok(parsed) =
+            krishiv_sql::parse_multipart_identifier(name, &krishiv_sql::ParserOptions::default())
+        else {
+            return Err(krishiv_common::error::KrishivIcebergProcedureArgument {
+                message: format!("Cannot parse identifier for arg table: {name}"),
+            }
+            .into());
+        };
+        let mut parts: Vec<String> = parsed.parts.into_iter().map(|p| p.value).collect();
+        // `cat.ns.t` names the catalog the call runs in; any other first part is a namespace.
+        if parts.len() > 2 && parts[0].eq_ignore_ascii_case(&self.catalog.name) {
+            parts.remove(0);
+        }
+        Ok(parts
+            .pop()
+            .filter(|_| !parts.is_empty())
+            .map(|table| (parts, table)))
+    }
+}
+
 impl ProcedureTables for RestProcedureTables {
+    fn sibling_locations<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<krishiv_connectors_iceberg::SiblingLocations>, KrishivError>>
+    {
+        Box::pin(async move {
+            let Some((namespace, table)) = self.split_name(name)? else {
+                return Ok(None);
+            };
+            let Some(names) = self.catalog.list_tables(&self.caller, &namespace).await? else {
+                return Ok(None);
+            };
+            let mut out = Vec::new();
+            for other in names.into_iter().filter(|n| *n != table) {
+                if let Some(l) = self
+                    .catalog
+                    .loaded(&self.caller, &namespace, &other)
+                    .await?
+                {
+                    out.push((
+                        format!("{}.{other}", namespace.join(".")),
+                        l.metadata.location().to_owned(),
+                    ));
+                }
+            }
+            Ok(Some(out))
+        })
+    }
+
     fn open<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<IcebergTable, KrishivError>> {
         Box::pin(async move {
             let catalog = &self.catalog;
-            // A multipart identifier, as the session's `MODIFY` check parsed it (`` db.`t.v1` ``).
-            let Ok(parsed) = krishiv_sql::parse_multipart_identifier(
-                name,
-                &krishiv_sql::ParserOptions::default(),
-            ) else {
-                // Iceberg 1.12.0's argument error (`Spark3Util.catalogAndIdentifier`).
-                return Err(krishiv_common::error::KrishivIcebergProcedureArgument {
-                    message: format!("Cannot parse identifier for arg table: {name}"),
-                }
-                .into());
-            };
-            let mut parts: Vec<String> = parsed.parts.into_iter().map(|p| p.value).collect();
-            // `cat.ns.t` names the catalog the call runs in; any other first part is a namespace.
-            if parts.len() > 2 && parts[0].eq_ignore_ascii_case(&catalog.name) {
-                parts.remove(0);
-            }
             let not_found = || -> KrishivError {
                 KrishivIcebergProcedureTableNotFound {
                     table: format!("'{name}'"),
@@ -596,10 +636,7 @@ impl ProcedureTables for RestProcedureTables {
                 }
                 .into()
             };
-            let Some(table) = parts.pop().filter(|_| !parts.is_empty()) else {
-                return Err(not_found());
-            };
-            let namespace = parts;
+            let (namespace, table) = self.split_name(name)?.ok_or_else(not_found)?;
             let Some(loaded) = catalog.loaded(&self.caller, &namespace, &table).await? else {
                 return Err(not_found());
             };
