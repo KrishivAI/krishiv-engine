@@ -322,6 +322,21 @@ impl DateTimePattern {
     /// instant within an offset of the `i64` range) or the pattern prints
     /// the name of a zone that needs the time-zone database.
     pub fn format_timestamp(&self, micros: i64, zone: Zone<'_>) -> Result<String, KrishivError> {
+        self.format_timestamp_nanos(micros, 0, zone)
+    }
+
+    /// [`Self::format_timestamp`] of `micros` plus `nanos` (0..=999) nanoseconds within the microsecond:
+    /// the fraction fields print up to nine digits. The legacy `SimpleDateFormat` pattern reads the
+    /// microseconds only.
+    ///
+    /// # Errors
+    /// As [`Self::format_timestamp`].
+    pub fn format_timestamp_nanos(
+        &self,
+        micros: i64,
+        nanos: u16,
+        zone: Zone<'_>,
+    ) -> Result<String, KrishivError> {
         if let Some(l) = &self.legacy {
             return l.format_timestamp(micros, zone);
         }
@@ -329,7 +344,7 @@ impl DateTimePattern {
         let local = micros
             .checked_add(i64::from(offset) * 1_000_000)
             .ok_or_else(|| unsupported("a timestamp past the year range in a pattern"))?;
-        format::format(&self.items, local, Some((offset, zone.id)), true)
+        format::format_nanos(&self.items, local, nanos, Some((offset, zone.id)), true)
     }
 
     /// `local` (a `TIMESTAMP_NTZ`, microseconds of the local date-time).

@@ -386,9 +386,42 @@ fn common_in(
             return widen_intervals(x, y).map(Some);
         }
         (T::Timestamp, T::TimestampNtz) | (T::TimestampNtz, T::Timestamp) => T::Timestamp,
-        _ => return None,
+        // The nanosecond timestamps (Spark 4.3) meet a timestamp or a date at the wider
+        // precision, with a time zone when either has one.
+        _ => return nanos_wider(x, y).map(Some),
     };
     Some(Some(t))
+}
+
+/// The (zone, precision) of a timestamp type, a date as an NTZ one of precision 0.
+fn timestamp_parts(t: &DataType) -> Option<(bool, u8)> {
+    use DataType as T;
+    match t {
+        T::Timestamp => Some((true, 6)),
+        T::TimestampNtz => Some((false, 6)),
+        T::TimestampNanos { precision } => Some((true, *precision)),
+        T::TimestampNtzNanos { precision } => Some((false, *precision)),
+        T::Date => Some((false, 0)),
+        _ => None,
+    }
+}
+
+/// The type a nanosecond timestamp meets another timestamp or a date at.
+fn nanos_wider(x: &DataType, y: &DataType) -> Option<DataType> {
+    use DataType as T;
+    if !matches!(x, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. })
+        && !matches!(y, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. })
+    {
+        return None;
+    }
+    let ((zx, px), (zy, py)) = (timestamp_parts(x)?, timestamp_parts(y)?);
+    let (zone, p) = (zx || zy, px.max(py));
+    let built = if zone {
+        T::timestamp_ltz(u32::from(p))
+    } else {
+        T::timestamp_ntz(u32::from(p))
+    };
+    built.ok()
 }
 
 /// The type two ANSI intervals of one family widen to: the lowest start and
@@ -450,7 +483,15 @@ fn legacy_string_type(args: &[Arg<'_>]) -> Option<Option<Option<DataType>>> {
     let promotes = |t: &&DataType| {
         is_numeric(t)
             || is_ansi_interval(t)
-            || matches!(t, T::String | T::Date | T::Timestamp | T::TimestampNtz)
+            || matches!(
+                t,
+                T::String
+                    | T::Date
+                    | T::Timestamp
+                    | T::TimestampNtz
+                    | T::TimestampNanos { .. }
+                    | T::TimestampNtzNanos { .. }
+            )
     };
     Some(typed.iter().all(promotes).then_some(Some(T::String)))
 }
@@ -1443,6 +1484,18 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         {
             Some(Some(t.clone()))
         }
+        (Some(t), InputType::StrictIntegralOrDecimal)
+            if matches!(t, T::Byte | T::Short | T::Integer | T::Long | T::Decimal(_)) =>
+        {
+            Some(Some(t.clone()))
+        }
+        (None, InputType::StrictIntegralOrDecimal) => Some(Some(T::Long)),
+        (Some(t), InputType::StrictTimestampNanos)
+            if matches!(t, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. }) =>
+        {
+            Some(Some(t.clone()))
+        }
+        (None, InputType::StrictTimestampNanos) => Some(Some(T::TimestampNanos { precision: 9 })),
         (Some(T::Timestamp), InputType::NumericOrTimestamp)
         | (None | Some(T::String), InputType::NumericOrTemporal) => Some(Some(T::Double)),
         (Some(t), InputType::NumericOrTemporal)
@@ -1511,7 +1564,13 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
                 || (*t == T::String && !f.is_nested())
                 || (*f == T::String && from_string)
                 || (*f == T::Date && matches!(t, T::Timestamp | T::TimestampNtz))
-                || (matches!(f, T::Timestamp | T::TimestampNtz) && *t == T::Date);
+                || (matches!(
+                    f,
+                    T::Timestamp
+                        | T::TimestampNtz
+                        | T::TimestampNanos { .. }
+                        | T::TimestampNtzNanos { .. }
+                ) && *t == T::Date);
             ok.then(|| Some(t.clone()))
         }
         _ => None,
@@ -1563,6 +1622,22 @@ pub(super) fn can_cast(
     };
     if from == to {
         return Ok(());
+    }
+    // The nanosecond timestamps (Spark 4.3) cast where their microsecond kin do.
+    let micros = |t: &DataType| match t {
+        T::TimestampNanos { .. } => T::Timestamp,
+        T::TimestampNtzNanos { .. } => T::TimestampNtz,
+        other => other.clone(),
+    };
+    if matches!(from, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. })
+        || matches!(to, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. })
+    {
+        let (f, t) = (micros(from), micros(to));
+        return if f == t {
+            Ok(())
+        } else {
+            can_cast(Some(&f), &t, mode, spark_4_3)
+        };
     }
     // Nothing but a NULL casts to VOID (an untyped NULL returned above).
     if *to == T::Null {

@@ -312,6 +312,7 @@ impl Parser<'_> {
                 kind,
                 collation,
                 span: p.span_from(start),
+                nanos_types: p.opts.spark_4_3 && p.opts.timestamp_nanos_types,
             })
         })
     }
@@ -625,7 +626,15 @@ impl Parser<'_> {
             && match args.as_slice() {
                 [] => true,
                 // As a number, as the validator reads it: `TIMESTAMP(06)` too.
-                [p] => self.opts.spark_4_3 && p.parse::<u32>() == Ok(6),
+                [p] => {
+                    self.opts.spark_4_3
+                        && match p.parse::<u32>() {
+                            Ok(6) => true,
+                            // The nanosecond types (7..=9) follow the setting too when they are on.
+                            Ok(7..=9) => self.opts.timestamp_nanos_types,
+                            _ => false,
+                        }
+                }
                 _ => false,
             }
         {

@@ -123,7 +123,9 @@ pub(crate) fn parse_schema_ddl(
     options: &krishiv_sql::ParserOptions,
 ) -> Result<krishiv_types::StructType, KrishivError> {
     let columns = krishiv_sql::parse_table_schema(ddl, options)?;
+    let nanos_types = columns.iter().any(|c| c.data_type.nanos_types);
     let spec = krishiv_sql::ast::DataTypeSpec {
+        nanos_types,
         kind: krishiv_sql::ast::DataTypeKind::Struct(Some(columns)),
         collation: None,
         span: krishiv_sql::ast::Span::new(0, ddl.len()),
