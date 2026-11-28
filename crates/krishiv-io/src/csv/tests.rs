@@ -60,7 +60,7 @@ fn b64(s: &str) -> Vec<u8> {
     out
 }
 
-fn options(map: &Value) -> FormatOptions {
+pub(super) fn options(map: &Value) -> FormatOptions {
     options_under(map, &Value::Null)
 }
 
@@ -284,7 +284,7 @@ fn read_split(
     }
 }
 
-fn read(
+pub(super) fn read(
     bytes: &[u8],
     o: &FormatOptions,
     req: &ScanRequest,
@@ -354,7 +354,7 @@ fn in_memory_file_on(
     (sched, file)
 }
 
-fn infer(bytes: &[u8], o: &FormatOptions) -> Result<SchemaRef, KrishivError> {
+pub(super) fn infer(bytes: &[u8], o: &FormatOptions) -> Result<SchemaRef, KrishivError> {
     infer_named(bytes, "f.csv", o)
 }
 
@@ -789,7 +789,7 @@ fn types_batch() -> RecordBatch {
     RecordBatch::try_new(Arc::new(Schema::new(fields)), cols).expect("batch")
 }
 
-fn encode(batch: &RecordBatch, o: &FormatOptions) -> Result<Vec<u8>, KrishivError> {
+pub(super) fn encode(batch: &RecordBatch, o: &FormatOptions) -> Result<Vec<u8>, KrishivError> {
     let mut e = CsvEncoder::new(&batch.schema(), o).map_err(|e| e.into_error("t.csv"))?;
     e.write(batch).map_err(|e| e.into_error("t.csv"))?;
     let mut out = Vec::new();

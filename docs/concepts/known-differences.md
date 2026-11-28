@@ -190,12 +190,12 @@ had the declared ones. Krishiv refuses such a result instead, and the error depe
   (SQLSTATE 22000), which names the returned and the declared type. `mapInPandas` converts each column to its
   declared type as PySpark's worker does (a `long` column declared `int` is returned as `int`) and raises
   `PYTHON_EXCEPTION` with the conversion's traceback when it cannot (a `long` column declared `string`). A null in
-  a column declared `NOT NULL` is accepted: see the last paragraph of
+  a column declared `NOT NULL` fails with `PYTHON_EXCEPTION`: see the last paragraph of
   [Several grouped-aggregate pandas UDFs in one `agg`](#several-grouped-aggregate-pandas-udfs-in-one-agg).
 
-A `mapInArrow` result with more columns than declared is refused too, in server mode as above and embedded with
-`INTERNAL_ERROR` (Spark reads the declared columns and ignores the rest when the setting is off; with it on, both
-raise `ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
+A `mapInArrow` result with more columns than declared is refused too by the server (Spark reads the declared columns
+and ignores the rest when the setting is off, as the embedded runtime does; with it on, all raise
+`ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
 here, so the setting is honoured whatever the version: under a Spark 3.5 or 4.0 client, which has no such setting,
 setting it still turns the check on.
 
@@ -257,6 +257,8 @@ analysis time. They match PySpark 4.2.0's answers (`python/tests/pyspark_udf/udt
   takes any value's text), but where Spark shows a JVM object's own `toString` in a string column (`[B@...` for
   `bytes`, `java.util.GregorianCalendar[...]` for a `date`), Krishiv shows the value's Python `str`; and a `Row`
   inside a result row, which Spark's JVM fails to unpickle (`PickleException`), is NULL in the column.
+- A `cogroup(...).applyInPandas` / `applyInArrow` whose two sides group on keys of different Spark types (`int` against
+  `bigint`) is refused with `KRISHIV_UNSUPPORTED_FEATURE`; the keys must have one type.
 - An `@arrow_udtf` (302) result with a NULL in a column declared `NOT NULL`: Spark 4.2.0's JVM fails reading the
   batch (`IllegalStateException`, no error class); Krishiv refuses it as a result unlike the declared schema
   (`PYTHON_EXCEPTION`).
@@ -866,12 +868,6 @@ nanosecond timestamp type yet (planned for 0.3.1), so:
 is in microseconds: `current_time(7..9)` and `LOCALTIME(7..9)` have zero digits below the
 microsecond, where Spark 4.3 reads a nanosecond clock.
 
-Also not matched yet under the Spark 4.3 profile:
-
-- The CSV and JSON file readers have no `TIME` columns: a read with one in its schema is
-  `KRISHIV_UNSUPPORTED_FEATURE` (`from_csv`, `from_json` and `from_xml` read them). Spark 4.2 reads
-  such a column with six fraction digits; Spark 4.3 keeps every digit of the file, whatever `p`.
-
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 
 `hll_sketch_agg` returns the sketch in the compact serialized form; Spark returns the updatable one
@@ -902,9 +898,10 @@ call of another query does not wait for a running `mapInPandas` or `applyInPanda
 The embedded `mapInArrow` takes each result batch's columns by position and relabels them with the
 declared schema; `mapInPandas` matches the result's columns to the declared schema by name, as Spark does. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded
 `mapInArrow` path compares the UDF's own field names with the declared schema and refuses a mismatch of names or
-types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A declared
-`NOT NULL` (and a nested `containsNull=false` or `valueContainsNull=false`) is not kept by the embedded runtime, so a
-nullable result is accepted where Spark 4.1+ refuses it.
+types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A NULL in a result column declared `NOT NULL`
+fails the query with `PYTHON_EXCEPTION`, where Spark 4.2.0's JVM fails reading the batch with no error class. A
+nested `containsNull=false` or `valueContainsNull=false` is not kept by the embedded runtime, so a NULL element or
+map value is accepted there.
 
 ## Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)
 

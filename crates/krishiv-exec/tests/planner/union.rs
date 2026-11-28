@@ -17,7 +17,7 @@ use super::{Env, env, run, table};
 
 /// `t` of [`env`] (`s` is `Utf8View`) and `u(a INT, s STRING)` with `s`
 /// stored as `Utf8`: the same logical type in two Arrow carriers.
-fn carriers() -> Env {
+pub(super) fn carriers() -> Env {
     let (t_schema, t_batches) = table(10);
     let u_schema = Arc::new(Schema::new(vec![
         Field::new("a", ArrowType::Int32, true),

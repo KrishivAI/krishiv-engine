@@ -453,6 +453,7 @@ time_trunc	function	4.1	true	scalar	0010000	2
 timestamp	function	3.5	true	scalar	0100000	1
 timestamp_micros	function	3.5	true	scalar	0100000	1
 timestamp_millis	function	3.5	true	scalar	0100000	1
+timestamp_nanos	function	4.3	true	scalar	0100000	1
 timestamp_seconds	function	3.5	true	scalar	0100000	1
 tinyint	function	3.5	true	scalar	0100000	1
 to_avro	function	4.0	unknown	unknown	0110000	[1, 2]
@@ -538,6 +539,7 @@ uniform	function	4.0	false	scalar	0011000	[2, 3]
 unix_date	function	3.5	true	scalar	0100000	1
 unix_micros	function	3.5	true	scalar	0100000	1
 unix_millis	function	3.5	true	scalar	0100000	1
+unix_nanos	function	4.3	true	scalar	0100000	1
 unix_seconds	function	3.5	true	scalar	0100000	1
 unix_timestamp	function	3.5	true	scalar	1110000	[0, 1, 2]
 upper	function	3.5	true	scalar	0100000	1

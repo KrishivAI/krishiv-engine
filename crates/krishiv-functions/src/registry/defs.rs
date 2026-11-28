@@ -203,10 +203,6 @@ fn always_null_date(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Date, true))
 }
 
-fn always_null_timestamp(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    Ok(ArgType::new(DataType::Timestamp, true))
-}
-
 /// The `TIME` types a time function takes: `TIME(6)` first (what an untyped `NULL` becomes),
 /// then every other precision of the profile's `TIME` (`[0, 6]` before Spark 4.3, `[0, 9]` from it).
 fn any_time(c: &CallTypes<'_>) -> InputType {
@@ -578,15 +574,9 @@ fn extract_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
         return vec![exact(DataType::String), InputType::Any];
     }
     let source = match extract_field(c) {
-        Ok(Some(part)) if is_time_field(part) => InputType::OneOf(
-            [DataType::Timestamp, DataType::TimestampNtz]
-                .into_iter()
-                .chain(
-                    (0..=DataType::TIME_MAX_PRECISION)
-                        .map(|precision| DataType::Time { precision }),
-                )
-                .collect(),
-        ),
+        Ok(Some(part)) if is_time_field(part) => {
+            nanos_arg(c, 1).unwrap_or_else(any_timestamp_or_time)
+        }
         Ok(Some(_)) => exact(DataType::Date),
         // The result rule reports the field.
         Ok(None) | Err(_) => InputType::Any,
@@ -621,6 +611,10 @@ fn extract_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
                     nullable,
                 )
             }
+            // A nanosecond timestamp's seconds keep nine digits, whatever its precision.
+            Some(t) if is_timestamp_nanos(t) => {
+                ArgType::new(DataType::Decimal(DecimalType::try_new(11, 9)?), nullable)
+            }
             _ => ArgType::new(DataType::Decimal(DecimalType::try_new(8, 6)?), nullable),
         },
         Some(_) => ArgType::new(DataType::Integer, nullable),
@@ -639,8 +633,69 @@ fn instant_input(c: &CallTypes<'_>, i: usize) -> InputType {
     }
 }
 
+/// Whether `t` is a nanosecond timestamp (`TIMESTAMP_LTZ(7..=9)` / `TIMESTAMP_NTZ(7..=9)`).
+pub(crate) const fn is_timestamp_nanos(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::TimestampNanos { .. } | DataType::TimestampNtzNanos { .. }
+    )
+}
+
+/// Argument `i` when it is a nanosecond timestamp (`TIMESTAMP_LTZ(7..=9)` / `TIMESTAMP_NTZ(7..=9)`, Spark
+/// 4.3): the datetime functions that read one take it as it is (`AnyTimestampType`), so the required type is
+/// the argument's own. Other arguments keep the function's own rule, and so its error messages.
+fn nanos_arg(c: &CallTypes<'_>, i: usize) -> Option<InputType> {
+    c.data_type(i)
+        .filter(|t| is_timestamp_nanos(t))
+        .map(|t| InputType::Strict(t.clone()))
+}
+
+/// `unix_nanos`: a `DECIMAL(21, 0)`, which holds the nanoseconds of years 1 to 9999.
+fn unix_nanos_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Decimal(DecimalType::try_new(21, 0)?), c)
+}
+
+/// `timestamp_nanos`: a `TIMESTAMP_LTZ(9)`.
+fn timestamp_nanos_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::TimestampNanos { precision: 9 }, c)
+}
+
 fn date_trunc_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
-    vec![exact(DataType::String), instant_input(c, 1)]
+    vec![
+        exact(DataType::String),
+        nanos_arg(c, 1).unwrap_or_else(|| instant_input(c, 1)),
+    ]
+}
+
+/// `date_trunc`: a `TIMESTAMP`, or a nanosecond timestamp as it came (Spark 4.3:
+/// `date_trunc('DAY', ts :: timestamp_ntz(7))` is a `timestamp_ntz(7)`); NULL for an unknown unit.
+fn date_trunc_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(match c.data_type(1) {
+        Some(t) if is_timestamp_nanos(t) => ArgType::new(t.clone(), true),
+        _ => ArgType::new(DataType::Timestamp, true),
+    })
+}
+
+/// `hour`, `minute`, `second`: a timestamp of either kind, a nanosecond timestamp or a `TIME`.
+fn time_field_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![nanos_arg(c, 0).unwrap_or_else(any_timestamp_or_time)]
+}
+
+/// Spark's `AnyTimestampType` with the `TIME` types, as the time fields take them; a date is cast to a
+/// timestamp.
+fn any_timestamp_or_time() -> InputType {
+    InputType::OneOf(
+        [DataType::Timestamp, DataType::TimestampNtz]
+            .into_iter()
+            .chain((0..=DataType::TIME_MAX_PRECISION).map(|precision| DataType::Time { precision }))
+            .collect(),
+    )
+}
+
+/// `unix_seconds`, `unix_millis`, `unix_micros`: a `TIMESTAMP`, nothing implicit; Spark 4.3 also reads
+/// a nanosecond timestamp of either kind.
+fn unix_part_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![nanos_arg(c, 0).unwrap_or(InputType::Strict(DataType::Timestamp))]
 }
 
 fn timestampadd_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
@@ -730,11 +785,24 @@ fn try_make_timestamp_ltz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(make_timestamp_result(c, DataType::Timestamp, true))
 }
 
+/// `make_timestamp_ntz(date, time)` is Spark's `MakeTimestampNTZ`, a `StaticInvoke` with the default
+/// `returnNullable = true` (the `try_` form a `TryEval` of it): nullable whatever the arguments. The
+/// `make_timestamp[_ltz](date, time)` forms are `MakeTimestampFromDateTime`, nullable with their arguments.
+fn ntz_date_form(c: &CallTypes<'_>) -> bool {
+    c.args().len() == 2
+}
+
 fn make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if ntz_date_form(c) {
+        return Ok(ArgType::new(DataType::TimestampNtz, true));
+    }
     Ok(make_timestamp_result(c, DataType::TimestampNtz, false))
 }
 
 fn try_make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if ntz_date_form(c) {
+        return Ok(ArgType::new(DataType::TimestampNtz, true));
+    }
     Ok(make_timestamp_result(c, DataType::TimestampNtz, true))
 }
 
@@ -912,7 +980,7 @@ fn to_timestamp_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
 fn unix_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     let mut out = Vec::new();
     if !c.args().is_empty() {
-        out.push(strict_date_like());
+        out.push(nanos_arg(c, 0).unwrap_or_else(strict_date_like));
     }
     if c.args().len() > 1 {
         out.push(InputType::Strict(DataType::String));
@@ -1031,7 +1099,7 @@ fn date_format_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     let first = match c.data_type(0) {
         Some(t @ DataType::Time { .. }) if c.profile() >= SparkProfile::V4_3 => exact(t.clone()),
         Some(DataType::Time { .. }) => exact(DataType::Timestamp),
-        _ => strict_date_like(),
+        _ => nanos_arg(c, 0).unwrap_or_else(strict_date_like),
     };
     vec![first, exact(DataType::String)]
 }
@@ -1105,8 +1173,20 @@ fn datetime() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["unix_seconds", "unix_millis", "unix_micros"],
-        &Inputs::Expects(vec![InputType::Strict(DataType::Timestamp)]),
+        &Inputs::Built(InputBuilder(unix_part_inputs)),
         long,
+    ));
+    // Spark 4.3: `unix_nanos` reads a nanosecond timestamp only; `timestamp_nanos` takes an integral or a
+    // decimal count (a decimal is floored) and is a `TIMESTAMP_LTZ(9)`.
+    out.extend(scalar(
+        &["unix_nanos"],
+        &Inputs::Expects(vec![InputType::StrictTimestampNanos]),
+        unix_nanos_result,
+    ));
+    out.extend(scalar(
+        &["timestamp_nanos"],
+        &Inputs::Expects(vec![InputType::StrictIntegralOrDecimal]),
+        timestamp_nanos_result,
     ));
     out.extend(scalar(
         &["date_from_unix_date"],
@@ -1120,15 +1200,9 @@ fn datetime() -> Vec<Spec> {
     ));
     // The time fields read a timestamp of either kind; a date is cast to
     // one.
-    let any_timestamp = InputType::OneOf(
-        [DataType::Timestamp, DataType::TimestampNtz]
-            .into_iter()
-            .chain((0..=DataType::TIME_MAX_PRECISION).map(|precision| DataType::Time { precision }))
-            .collect(),
-    );
     out.extend(scalar(
         &["hour", "minute", "second"],
-        &Inputs::Expects(vec![any_timestamp]),
+        &Inputs::Built(InputBuilder(time_field_inputs)),
         time_field,
     ));
     out.extend(scalar(&["monthname", "dayname"], &date_only, string));
@@ -1148,7 +1222,7 @@ fn datetime() -> Vec<Spec> {
     out.extend(scalar(
         &["date_trunc"],
         &Inputs::Built(InputBuilder(date_trunc_inputs)),
-        always_null_timestamp,
+        date_trunc_result,
     ));
     out.extend(scalar(
         &["time_trunc"],
