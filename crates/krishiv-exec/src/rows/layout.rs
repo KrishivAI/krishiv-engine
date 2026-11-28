@@ -24,9 +24,11 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
 use arrow_array::{Array, ArrayRef, BooleanArray, make_array};
-use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{
+    BooleanBuffer, Buffer, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer, ScalarBuffer,
+};
 use arrow_data::ArrayData;
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use krishiv_common::error::KrishivUnsupportedFeature;
 
 use crate::error::{Result, internal};
@@ -420,22 +422,28 @@ impl RowLayout {
                     c.null_bit
                         .is_none_or(|bit| r[self.validity_at + bit / 8] & (1 << (bit % 8)) == 0)
                 };
-                let values = rows.iter().map(|&(r, heap)| {
+                // The values go back to back into one buffer as they are
+                // read, so a string column is checked as UTF-8 once over its
+                // bytes, not value by value into a list of `&str`
+                // (ClickBench q14: 7.7% of samples in `from_utf8`).
+                let mut values = ByteValues::with_capacity(rows.len());
+                for &(r, heap) in rows {
                     if !valid(r) {
-                        return Ok(None);
+                        values.push_null();
+                        continue;
                     }
                     let len = view_len(r, c.offset);
                     if len <= INLINE_MAX {
-                        Ok(Some(&r[c.offset + 4..c.offset + 4 + len]))
+                        values.push(&r[c.offset + 4..c.offset + 4 + len]);
                     } else {
                         let start = usize::try_from(word(r, c.offset + 8)).unwrap_or(usize::MAX);
-                        heap.get(start..start.saturating_add(len))
-                            .map(Some)
-                            .ok_or_else(|| internal("a row view outside its heap".to_owned()))
+                        let bytes = heap
+                            .get(start..start.saturating_add(len))
+                            .ok_or_else(|| internal("a row view outside its heap".to_owned()))?;
+                        values.push(bytes);
                     }
-                });
-                let values = values.collect::<Result<Vec<Option<&[u8]>>>>()?;
-                strings_array(&c.data_type, &values)
+                }
+                values.finish(&c.data_type)
             })
             .collect()
     }
@@ -1036,28 +1044,93 @@ fn gather<const N: usize>(out: &mut [u8], rows: &[&[u8]], at: usize) {
     }
 }
 
-/// An array of string or binary `data_type` holding `values`.
-fn strings_array(data_type: &DataType, values: &[Option<&[u8]>]) -> Result<ArrayRef> {
-    use arrow_array::{
-        BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringArray,
-        StringViewArray,
-    };
-    let text = || {
-        values
-            .iter()
-            .map(|v| v.map(std::str::from_utf8).transpose())
-            .collect::<std::result::Result<Vec<Option<&str>>, _>>()
-            .map_err(|e| internal(format!("a row string is not UTF-8: {e}")))
-    };
-    Ok(match data_type {
-        DataType::Utf8 => Arc::new(StringArray::from(text()?)),
-        DataType::LargeUtf8 => Arc::new(LargeStringArray::from(text()?)),
-        DataType::Utf8View => Arc::new(StringViewArray::from(text()?)),
-        DataType::Binary => Arc::new(BinaryArray::from(values.to_vec())),
-        DataType::LargeBinary => Arc::new(LargeBinaryArray::from(values.to_vec())),
-        DataType::BinaryView => Arc::new(BinaryViewArray::from(values.to_vec())),
-        t => return Err(internal(format!("no row view decoding for {t}"))),
-    })
+/// String or binary values decoded from rows, back to back: one offsets
+/// list and one value buffer, the layout of a `LargeUtf8` / `LargeBinary`
+/// array. [`finish`](Self::finish) validates a string column once over all
+/// its bytes (arrow's `try_new`: one `from_utf8`, then every offset on a
+/// character boundary), and a view column takes the buffer as its one data
+/// block without copying or checking it again.
+struct ByteValues {
+    offsets: Vec<i64>,
+    bytes: Vec<u8>,
+    nulls: NullBufferBuilder,
+}
+
+impl ByteValues {
+    fn with_capacity(rows: usize) -> Self {
+        let mut offsets = Vec::with_capacity(rows + 1);
+        offsets.push(0);
+        Self {
+            offsets,
+            bytes: Vec::new(),
+            nulls: NullBufferBuilder::new(rows),
+        }
+    }
+
+    fn push(&mut self, value: &[u8]) {
+        self.bytes.extend_from_slice(value);
+        // A `Vec` never holds more than `isize::MAX` bytes.
+        self.offsets
+            .push(i64::try_from(self.bytes.len()).unwrap_or(i64::MAX));
+        self.nulls.append_non_null();
+    }
+
+    fn push_null(&mut self) {
+        self.offsets
+            .push(i64::try_from(self.bytes.len()).unwrap_or(i64::MAX));
+        self.nulls.append_null();
+    }
+
+    /// The array of string or binary `data_type` holding the values.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a string that is not UTF-8 (a corrupt row), a
+    /// `Utf8` / `Binary` column past its 2 GiB offsets, or a type rows do not
+    /// store as views.
+    fn finish(mut self, data_type: &DataType) -> Result<ArrayRef> {
+        use arrow_array::{
+            BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringArray,
+            StringViewArray,
+        };
+        let nulls = self.nulls.finish();
+        let values = Buffer::from_vec(self.bytes);
+        let not_utf8 = |e: ArrowError| internal(format!("a row string is not UTF-8: {e}"));
+        let large = OffsetBuffer::new(ScalarBuffer::from(self.offsets));
+        let small = |large: &OffsetBuffer<i64>| {
+            large
+                .iter()
+                .map(|&o| i32::try_from(o))
+                .collect::<std::result::Result<Vec<i32>, _>>()
+                .map(|o| OffsetBuffer::new(ScalarBuffer::from(o)))
+                .map_err(|_| {
+                    internal(format!(
+                        "{} bytes of {data_type} values in one row batch",
+                        values.len()
+                    ))
+                })
+        };
+        Ok(match data_type {
+            DataType::Utf8 => {
+                Arc::new(StringArray::try_new(small(&large)?, values, nulls).map_err(not_utf8)?)
+            }
+            DataType::LargeUtf8 => {
+                Arc::new(LargeStringArray::try_new(large, values, nulls).map_err(not_utf8)?)
+            }
+            DataType::Utf8View => Arc::new(StringViewArray::from(
+                &LargeStringArray::try_new(large, values, nulls).map_err(not_utf8)?,
+            )),
+            DataType::Binary => {
+                Arc::new(BinaryArray::try_new(small(&large)?, values, nulls).map_err(not_utf8)?)
+            }
+            DataType::LargeBinary => {
+                Arc::new(LargeBinaryArray::try_new(large, values, nulls).map_err(not_utf8)?)
+            }
+            DataType::BinaryView => Arc::new(BinaryViewArray::from(
+                &LargeBinaryArray::try_new(large, values, nulls).map_err(not_utf8)?,
+            )),
+            t => return Err(internal(format!("no row view decoding for {t}"))),
+        })
+    }
 }
 
 /// Rows taken out of [`EncodedKeys`] by [`EncodedKeys::gather`].
