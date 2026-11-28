@@ -32,6 +32,7 @@
 //! the JSON data source.
 
 mod base64;
+pub mod decimal;
 mod infer;
 mod options;
 mod parse;
@@ -40,7 +41,7 @@ mod read;
 mod table;
 mod write;
 
-pub use infer::infer_json;
+pub use infer::{InferSession, infer_json, infer_json_with};
 pub use options::{JsonOptions, ParseMode};
 pub use path::{get_json_object, json_array_length, json_object_keys};
 pub use read::read_json;

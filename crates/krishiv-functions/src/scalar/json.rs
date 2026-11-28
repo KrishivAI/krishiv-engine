@@ -200,17 +200,24 @@ fn schema_of(args: &[BindArg], _opts: &BindOptions) -> Result<Binding, KrishivEr
 /// constant JSON text, for the analyzer to fold (`None`: the type is
 /// deeper than Jackson's limit, so no DDL names it).
 ///
+/// The options are read as under `spark.sql.legacy.timeParserPolicy=LEGACY`
+/// when `legacy`; `session` holds the other session settings string
+/// inference reads (`inferTimestamp`: the `TIME` gate, the default
+/// timestamp type, the zone).
+///
 /// # Errors
 /// `KRISHIV_MALFORMED_JSON` for malformed text and the option errors of
 /// the JSON data source.
 pub fn schema_of_json_ddl(
     json: &str,
     pairs: &[(String, String)],
+    legacy: bool,
+    session: &krishiv_kernels::json::InferSession<'_>,
 ) -> Result<Option<String>, KrishivError> {
-    let options = JsonOptions::from_map(&pairs.iter().cloned().collect())?;
+    let options = JsonOptions::from_map_with(&pairs.iter().cloned().collect(), legacy)?;
     let drop = options.drop_field_if_all_null;
     let text = StringArray::from(vec![Some(json)]);
-    let inferred = infer_json(&text, &options)?;
+    let inferred = krishiv_kernels::json::infer_json_with(&text, &options, session)?;
     Ok(inferred
         .into_iter()
         .next()

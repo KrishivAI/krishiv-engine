@@ -547,7 +547,11 @@ async fn a_udtf_re_registration_is_a_new_version_and_a_fresh_analysis() {
     let err = session
         .register_python_udtf(udtf("bad", PythonEvalType::ScalarArrow, &["a"]))
         .unwrap_err();
-    assert_eq!(err.error_class(), ErrorClass::InternalError, "{err}");
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivInvalidPythonRelation,
+        "{err}"
+    );
 }
 
 /// A built-in table function resolves before a UDTF of the same name, as Spark 4.2.0's

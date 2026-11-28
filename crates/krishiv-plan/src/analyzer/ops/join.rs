@@ -786,6 +786,36 @@ impl Resolver<'_> {
                     .collect();
                 self.project_items(p, &c, &exprs, env)
             }
+            ColumnNamesOp::Deduplicate { subset } => {
+                // One row per key: the input's columns in order, a key as itself and any
+                // other as `first(col) AS col`, over a group by the keys.
+                let col = |n: &str| Arc::new(Expr::column([n.to_owned()]));
+                let keys: Vec<Arc<Expr>> = subset.iter().map(|k| col(k)).collect();
+                let items: Vec<Arc<Expr>> = c
+                    .out
+                    .iter()
+                    .map(|a| {
+                        let name = &a.col.name;
+                        if subset.iter().any(|k| same(name, k)) {
+                            col(name)
+                        } else {
+                            Arc::new(Expr::new(ExprNode::Alias {
+                                expr: Arc::new(Expr::new(ExprNode::Function(FunctionCall {
+                                    name: "first".to_owned(),
+                                    qualifier: Vec::new(),
+                                    args: vec![col(name)],
+                                    arg_names: Vec::new(),
+                                    distinct: false,
+                                    filter: None,
+                                    within_group: Vec::new(),
+                                }))),
+                                name: name.clone(),
+                            }))
+                        }
+                    })
+                    .collect();
+                self.aggregate(p, input, &crate::Grouping::GroupBy(keys), &items, env)
+            }
             ColumnNamesOp::DropNa {
                 subset,
                 min_non_nulls,
