@@ -62,8 +62,14 @@ SELECT column_name, data_type FROM information_schema.columns
  WHERE table_schema = 'demo' AND table_name = 't' ORDER BY ordinal_position;
 ```
 
-Rows follow the `SHOW TABLES` listing rule: an object the principal may not list is absent, as it is there.
-Temporary views and declared catalogs are not listed yet.
+Rows follow the `SHOW TABLES` / `SHOW NAMESPACES` listing rule: an object the principal may not list is absent, as
+it is there. `view_definition` is shown only for a view the principal may also `SELECT` (a view's text is data). The
+views themselves are readable by every principal, also under the `grants` provider. `information_schema` has no row
+in `schemata` or `tables`, and `catalogs` always shows `spark_catalog`. Temporary views and declared catalogs are not
+listed yet.
+
+`information_schema` is reserved in `spark_catalog`: creating, dropping or writing it or a table in it fails with
+`KRISHIV_RESERVED_NAME` (Spark has no such namespace, so this diverges only for a workload that created one).
 
 ## Writing data
 

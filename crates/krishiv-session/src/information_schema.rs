@@ -37,6 +37,23 @@ impl std::fmt::Debug for Source {
     }
 }
 
+/// Whether `name` is the reserved namespace, in any letter case.
+pub(crate) fn is_namespace(name: &str) -> bool {
+    name.eq_ignore_ascii_case(NAMESPACE)
+}
+
+/// Whether `securable` is one of the views (or a column of one): any principal may read them, and
+/// the rows are filtered by what it may list (`Source`).
+pub(crate) fn is_view_securable(securable: &Securable) -> bool {
+    let (Securable::Table(t) | Securable::View(t) | Securable::Column { table: t, .. }) = securable
+    else {
+        return false;
+    };
+    t.catalog.eq_ignore_ascii_case(crate::catalog::CATALOG)
+        && matches!(t.namespace.as_slice(), [n] if is_namespace(n))
+        && is_view(&t.name)
+}
+
 /// Whether `name` is one of the views.
 pub(crate) fn is_view(name: &str) -> bool {
     matches!(
@@ -98,21 +115,12 @@ pub(crate) fn columns(name: &str) -> Option<Vec<TableColumn>> {
 }
 
 impl Source {
-    fn listable(&self, securable: &Securable) -> Option<bool> {
-        self.grants
-            .as_ref()
-            .and_then(|g| g.listable(&self.principal, securable))
-    }
-
     async fn may_list(&self, securable: &Securable) -> bool {
-        if let Some(listed) = self.listable(securable) {
-            return listed;
-        }
-        krishiv_plan::analyzer::allowed(
+        crate::access::may_list_as(
             &*self.policy,
             &self.principal,
+            self.grants.as_deref(),
             securable,
-            Privilege::Browse,
         )
         .await
     }
@@ -131,23 +139,16 @@ impl Source {
                     shown.push(t);
                 }
             }
-            let namespace_securable =
-                Securable::Namespace(vec![crate::catalog::CATALOG.to_owned(), namespace.clone()]);
-            let mut listed = !shown.is_empty() || self.may_list(&namespace_securable).await;
-            if !listed {
-                for name in CatalogStore::functions(&*self.store).in_namespace(&namespace) {
-                    let securable = Securable::Function(vec![
-                        crate::catalog::CATALOG.to_owned(),
-                        namespace.clone(),
-                        name,
-                    ]);
-                    if self.may_list(&securable).await {
-                        listed = true;
-                        break;
-                    }
-                }
-            }
-            if listed {
+            // The rule of `SHOW NAMESPACES`, shared with it.
+            if crate::access::may_list_namespace_as(
+                &*self.policy,
+                &self.principal,
+                self.grants.as_deref(),
+                &self.store,
+                &namespace,
+            )
+            .await
+            {
                 schemas.push(namespace);
             }
             relations.extend(shown);
@@ -166,10 +167,16 @@ impl Source {
         let Some(table_columns) = columns(&name) else {
             return Ok(None);
         };
-        let (schemas, relations) = self.relations().await;
         let catalog = crate::catalog::CATALOG;
+        if name == "catalogs" {
+            return Ok(Some(self.assemble(
+                &name,
+                table_columns,
+                vec![text([Some(catalog)].into_iter())],
+            )?));
+        }
+        let (schemas, relations) = self.relations().await;
         let values: Vec<ArrayRef> = match name.as_str() {
-            "catalogs" => vec![text([Some(catalog)].into_iter())],
             "schemata" => vec![
                 text(schemas.iter().map(|_| Some(catalog))),
                 text(schemas.iter().map(|s| Some(s.as_str()))),
@@ -187,10 +194,22 @@ impl Source {
                 })),
             ],
             "views" => {
-                let views: Vec<(&CatalogTable, &str)> = relations
-                    .iter()
-                    .filter_map(|t| t.view.as_ref().map(|v| (&**t, v.sql.as_str())))
-                    .collect();
+                // A view's text is data: it needs `Select`, not only the right to list the view
+                // (as `SHOW TABLE EXTENDED` does).
+                let mut views: Vec<(&CatalogTable, &str)> = Vec::new();
+                for t in &relations {
+                    if let Some(v) = &t.view
+                        && krishiv_plan::analyzer::allowed(
+                            &*self.policy,
+                            &self.principal,
+                            &crate::session::Session::relation_securable(t),
+                            Privilege::Select,
+                        )
+                        .await
+                    {
+                        views.push((&**t, v.sql.as_str()));
+                    }
+                }
                 vec![
                     text(views.iter().map(|_| Some(catalog))),
                     text(views.iter().map(|(t, _)| Some(t.namespace.as_str()))),
@@ -205,7 +224,12 @@ impl Source {
                     .collect();
                 let types: Vec<String> = rows
                     .iter()
-                    .map(|(t, i)| t.columns[*i].data_type.simple_string())
+                    .map(|(t, i)| {
+                        let c = &t.columns[*i];
+                        c.char_varchar
+                            .clone()
+                            .unwrap_or_else(|| c.data_type.catalog_string())
+                    })
                     .collect();
                 vec![
                     text(rows.iter().map(|_| Some(catalog))),
@@ -224,8 +248,18 @@ impl Source {
                 ]
             }
         };
+        self.assemble(&name, table_columns, values).map(Some)
+    }
+
+    /// The view `name` as a table of `values`, one array per column.
+    fn assemble(
+        &self,
+        name: &str,
+        table_columns: Vec<TableColumn>,
+        values: Vec<ArrayRef>,
+    ) -> Result<(Vec<TableColumn>, Arc<MemoryTable>), KrishivError> {
         let plain = Arc::new(Schema::new(
-            layout(&name)
+            layout(name)
                 .into_iter()
                 .map(|(column, nullable, integer)| {
                     Field::new(
@@ -245,9 +279,9 @@ impl Source {
             message: format!("information_schema.{name}: {e}"),
         })?;
         let batch = crate::carrier::recarried(&batch, &schema)?;
-        Ok(Some((
+        Ok((
             table_columns,
             Arc::new(MemoryTable::new(schema, vec![Batch::new(batch)])),
-        )))
+        ))
     }
 }
